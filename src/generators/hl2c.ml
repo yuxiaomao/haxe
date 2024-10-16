@@ -541,7 +541,11 @@ let generate_function ctx f =
 
 	let rcast r t =
 		if tsame (rtype r) t then (reg r)
-		else Printf.sprintf "((%s)%s)" (ctype t) (reg r)
+		else
+			(match t with
+			| HPacked _ -> Printf.sprintf "*((%s*)%s)" (ctype t) (reg r)
+			| _ -> Printf.sprintf "((%s)%s)" (ctype t) (reg r)
+			)
 	in
 
 	let rfun r args t =
