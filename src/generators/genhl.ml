@@ -3269,6 +3269,7 @@ and gen_method_wrapper ctx rt t p =
 		fid
 
 and make_fun ?gen_content ctx name fidx f cthis cparent =
+	let t = Timer.timer ["generate";"hl";"add_types";"generate_type";"make_fun"] in
 	let old = ctx.m in
 	let capt = build_capture_vars ctx f in
 	let has_captured_vars = Array.length capt.c_vars > 0 in
@@ -3441,6 +3442,7 @@ and make_fun ?gen_content ctx name fidx f cthis cparent =
 		hlf
 	in
 	DynArray.add ctx.cfunctions f;
+	t();
 	capt
 
 let generate_static ctx c f =
@@ -4175,6 +4177,7 @@ let create_context com dump =
 	ctx
 
 let add_types ctx types =
+	let t = Timer.timer ["generate";"hl";"add_types";"patch type"] in
 	List.iter (fun t ->
 		match t with
 		| TClassDecl ({ cl_path = ["hl";"types"], ("BytesIterator"|"BytesKeyValueIterator"|"ArrayBytes") } as c) ->
@@ -4210,7 +4213,10 @@ let add_types ctx types =
 			) c.cl_meta;
  		| _ -> ()
 	) types;
-	List.iter (generate_type ctx) types
+	t();
+	let t = Timer.timer ["generate";"hl";"add_types";"generate_type"] in
+	List.iter (generate_type ctx) types;
+	t()
 
 let build_code ctx types main =
 	let ep = generate_static_init ctx types main in
@@ -4259,14 +4265,20 @@ let generate com =
 	end else
 
 	let ctx = create_context com dump in
+	let t = Timer.timer ["generate";"hl";"add_types"] in
 	add_types ctx com.types;
+	t();
+	let t = Timer.timer ["generate";"hl";"build_code"] in
 	let code = build_code ctx com.types com.main.main_expr in
 	Array.sort (fun (lib1,_,_,_) (lib2,_,_,_) -> lib1 - lib2) code.natives;
+	t();
 	if dump then begin
+		let t = Timer.timer ["generate";"hl";"write dump"] in
 		(match ctx.dump_out with None -> () | Some ch -> IO.close_out ch);
 		let ch = open_out_bin "dump/hlcode.txt" in
 		Hlcode.dump (fun s -> output_string ch (s ^ "\n")) code;
 		close_out ch;
+		t();
 	end;
 	(*if Common.raw_defined com "hl_dump_spec" then begin
 		let ch = open_out_bin "dump/hlspec.txt" in
@@ -4280,8 +4292,10 @@ let generate com =
 		close_out ch;
 	end;*)
 	if hl_check then begin
+		let t = Timer.timer ["generate";"hl";"check"] in
 		check ctx;
 		Hlinterp.check com.error code;
+		t();
 	end;
 	let t = Timer.timer ["generate";"hl";"write"] in
 
@@ -4317,7 +4331,9 @@ let generate com =
 	Hlopt.clean_cache();
 	t();
 	if Common.raw_defined com "run" then begin
+		let t = Timer.timer ["generate";"hl";"run"] in
 		if com.run_command_args "haxelib" ["run";"hashlink";"run";escape_command com.file] <> 0 then failwith "Failed to run HL";
+		t();
 	end;
 	if Common.defined com Define.Interp then
 		try
