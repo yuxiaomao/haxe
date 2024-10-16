@@ -3269,7 +3269,7 @@ and gen_method_wrapper ctx rt t p =
 		fid
 
 and make_fun ?gen_content ctx name fidx f cthis cparent =
-	let t = Timer.timer ["generate";"hl";"add_types";"generate_type";"make_fun"] in
+	let t = Timer.timer ["generate";"hl";"add_types";"make_fun"] in
 	let old = ctx.m in
 	let capt = build_capture_vars ctx f in
 	let has_captured_vars = Array.length capt.c_vars > 0 in
@@ -3399,7 +3399,9 @@ and make_fun ?gen_content ctx name fidx f cthis cparent =
 	| None -> ()
 	| Some f -> f());
 
+	let t_eval = Timer.timer ["generate";"hl";"add_types";"eval_expr"] in
 	ignore(eval_expr ctx f.tf_expr);
+	t_eval();
 	let tret = to_type ctx f.tf_type in
 	let rec has_final_jump e =
 		(* prevents a jump outside function bounds error *)
@@ -3435,7 +3437,7 @@ and make_fun ?gen_content ctx name fidx f cthis cparent =
 	Hashtbl.add ctx.defined_funs fidx ();
 	let f = if ctx.optimize && (gen_content = None || name <> ("","")) then begin
 		let t = Timer.timer ["generate";"hl";"opt"] in
-		let f = Hlopt.optimize ctx.dump_out (DynArray.get ctx.cstrings.arr) hlf f in
+		let f = Hlopt.optimize (ctx.com.warning WGenerator []) ctx.dump_out (DynArray.get ctx.cstrings.arr) hlf f in
 		t();
 		f
 	end else
@@ -4177,7 +4179,6 @@ let create_context com dump =
 	ctx
 
 let add_types ctx types =
-	let t = Timer.timer ["generate";"hl";"add_types";"patch type"] in
 	List.iter (fun t ->
 		match t with
 		| TClassDecl ({ cl_path = ["hl";"types"], ("BytesIterator"|"BytesKeyValueIterator"|"ArrayBytes") } as c) ->
@@ -4213,7 +4214,6 @@ let add_types ctx types =
 			) c.cl_meta;
  		| _ -> ()
 	) types;
-	t();
 	let t = Timer.timer ["generate";"hl";"add_types";"generate_type"] in
 	List.iter (generate_type ctx) types;
 	t()
@@ -4248,7 +4248,9 @@ let make_context_sign com =
 		Hashtbl.add mhash mid true
 	) com.types;
 	let data = Marshal.to_string mhash [No_sharing] in
-	Digest.to_hex (Digest.string data)
+	let hex = Digest.to_hex (Digest.string data) in
+	com.warning WGenerator [] (Printf.sprintf "count %d; \nmake_context_sign: %s" (List.length com.types)hex) {pfile = "make_context_string"; pmin = 0; pmax = 0;} ;
+	hex
 
 let prev_sign = ref "" and prev_data = ref ""
 
@@ -4265,9 +4267,7 @@ let generate com =
 	end else
 
 	let ctx = create_context com dump in
-	let t = Timer.timer ["generate";"hl";"add_types"] in
 	add_types ctx com.types;
-	t();
 	let t = Timer.timer ["generate";"hl";"build_code"] in
 	let code = build_code ctx com.types com.main.main_expr in
 	Array.sort (fun (lib1,_,_,_) (lib2,_,_,_) -> lib1 - lib2) code.natives;
@@ -4328,6 +4328,7 @@ let generate com =
 		prev_sign := sign;
 		prev_data := str;
 	end;
+	com.warning WGenerator [] (Printf.sprintf "used_cache: %d" (!Hlopt.used_cache)) {pfile = "make_context_string"; pmin = 0; pmax = 0;} ;
 	Hlopt.clean_cache();
 	t();
 	if Common.raw_defined com "run" then begin
