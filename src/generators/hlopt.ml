@@ -1062,7 +1062,7 @@ let used_mark = ref 0
 let used_cache = ref 0
 
 let optimize comwarning dump get_str (f:fundecl) (hxf:Type.tfunc) =
-	let sign = fundecl_name f in
+	let sign = if f.fpath <> ("","") then fundecl_name f else (Printf.sprintf "%s:%d" hxf.tf_expr.epos.pfile hxf.tf_expr.epos.pmin) in
 	(* let sign = (Printf.sprintf "%s:%d:%d" (fundecl_name f) (Array.length f.code) (Array.length f.regs)) in *)
 	let old_code = Array.copy f.code in
 	(* let old_code = match dump with None -> f.code | Some _ -> Array.copy f.code in *)
@@ -1079,7 +1079,6 @@ let optimize comwarning dump get_str (f:fundecl) (hxf:Type.tfunc) =
 		) c.c_old_code;
 		(* comwarning (Printf.sprintf "Found cache %s" sign) hxf.tf_expr.epos; *)
 		(* raise Not_found; *)
-		(* Globals.die "" __LOC__; *)
 		let code = c.c_code in
 		Array.iter (fun i ->
 			let op = (match Array.unsafe_get code i, Array.unsafe_get f.code i with
@@ -1100,7 +1099,7 @@ let optimize comwarning dump get_str (f:fundecl) (hxf:Type.tfunc) =
 			| ODynGet (r,o,_), ODynGet (_,_,idx) -> ODynGet (r,o,idx)
 			| ODynSet (o,_,v), ODynSet (_,idx,_) -> ODynSet (o,idx,v)
 			| OType (r,_), OType (_,t) -> OType (r,t)
-			| _ -> raise Not_found) in
+			| _ -> Globals.die "" __LOC__) in
 			Array.unsafe_set code i op
 		) c.c_remap_indexes;
 		incr used_cache;
