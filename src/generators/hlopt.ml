@@ -1049,6 +1049,124 @@ let _optimize (f:fundecl) =
 		r_reg_moved = reg_moved;
 	}
 
+let same_op op1 op2 =
+	match op1, op2 with
+	| OMov (a1,b1), OMov (a2, b2) -> a1 = a2 && b1 = b2
+	| OInt (r1,_), OInt (r2, _) -> r1 = r2
+	| OFloat (r1,_), OFloat (r2,_) -> r1 = r2
+	| OBool (r1,b1), OBool (r2,b2) -> r1 = r2 && b1 = b2
+	| OBytes (r1,_), OBytes (r2,_) -> r1 = r2
+	| OString (r1,_), OString (r2,_) -> r1 = r2
+	| ONull r1, ONull r2 -> r1 = r2
+	| OAdd (r1,a1,b1), OAdd (r2,a2,b2)
+	| OSub (r1,a1,b1), OSub (r2,a2,b2)
+	| OMul (r1,a1,b1), OMul (r2,a2,b2)
+	| OSDiv (r1,a1,b1), OSDiv (r2,a2,b2)
+	| OUDiv (r1,a1,b1), OUDiv (r2,a2,b2)
+	| OSMod (r1,a1,b1), OSMod (r2,a2,b2)
+	| OUMod (r1,a1,b1), OUMod (r2,a2,b2)
+	| OShl (r1,a1,b1), OShl (r2,a2,b2)
+	| OSShr (r1,a1,b1), OSShr (r2,a2,b2)
+	| OUShr (r1,a1,b1), OUShr (r2,a2,b2)
+	| OAnd (r1,a1,b1), OAnd (r2,a2,b2)
+	| OOr (r1,a1,b1), OOr (r2,a2,b2)
+	| OXor (r1,a1,b1), OXor (r2,a2,b2)
+		-> r1 = r2 && a1 = a2 && b1 = b2
+	| ONeg (r1,v1), ONeg (r2,v2)
+	| ONot (r1,v1), ONot (r2,v2)
+		-> r1 = r2 && v1 = v2
+	| OIncr r1, OIncr r2
+	| ODecr r1, ODecr r2
+		-> r1 = r2
+	| OCall0 (r1,_), OCall0 (r2,_) -> r1 = r2
+	| OCall1 (r1,_,a1), OCall1 (r2,_,a2) -> r1 = r2 && a1 = a2
+	| OCall2 (r1,_,a1,b1), OCall2 (r2,_,a2,b2) -> r1 = r2 && a1 = a2 && b1 = b2
+	| OCall3 (r1,_,a1,b1,c1), OCall3 (r2,_,a2,b2,c2) -> r1 = r2 && a1 = a2 && b1 = b2 && c1 = c2
+	| OCall4 (r1,_,a1,b1,c1,d1), OCall4 (r2,_,a2,b2,c2,d2) -> r1 = r2 && a1 = a2 && b1 = b2 && c1 = c2 && d1 = d2
+	| OCallN (r1,_,rl1), OCallN (r2,_,rl2) -> r1 = r2 && rl1 = rl2
+	| OCallMethod (r1,f1,rl1), OCallMethod (r2,f2,rl2) -> r1 = r2 && f1 = f2 && rl1 = rl2
+	| OCallClosure (r1,f1,rl1), OCallClosure (r2,f2,rl2) -> r1 = r2 && f1 = f2 && rl1 = rl2
+	| OCallThis (r1,f1,rl1), OCallThis (r2,f2,rl2) -> r1 = r2 && f1 = f2 && rl1 = rl2
+	| OStaticClosure (r1,_), OStaticClosure (r2,_) -> r1 = r2
+	| OInstanceClosure (r1,_,v1), OInstanceClosure (r2,_,v2) -> r1 = r2 && v1 = v2
+	| OVirtualClosure (r1,o1,m1), OVirtualClosure (r2,o2,m2) -> r1 = r2 && o1 = o2 && m1 = m2
+	| OGetGlobal (r1,_), OGetGlobal (r2,_)
+	| OSetGlobal (_,r1), OSetGlobal (_,r2)
+		-> r1 = r2
+	| OField (r1,o1,i1), OField (r2,o2,i2)
+	| OSetField (o1,i1,r1), OSetField (o2,i2,r2)
+		-> r1 = r2 && o1 = o2 && i1 = i2
+	| OGetThis (r1,i1), OGetThis (r2,i2)
+	| OSetThis (i1,r1), OSetThis (i2,r2)
+		-> r1 = r2 && i1 = i2
+	| ODynGet (r1,o1,_), ODynGet (r2,o2,_) -> r1 = r2 && o1 = o2
+	| ODynSet (o1,_,v1), ODynSet (o2,_,v2) -> o1 = o2 && v1 = v2
+	| OJTrue (r1,d1), OJTrue (r2,d2)
+	| OJFalse (r1,d1), OJFalse (r2,d2)
+	| OJNull (r1,d1), OJNull (r2,d2)
+	| OJNotNull (r1,d1), OJNotNull (r2,d2)
+		-> r1 = r2 && d1 = d2
+	| OJSLt (a1,b1,i1), OJSLt (a2,b2,i2)
+	| OJSGte (a1,b1,i1), OJSGte (a2,b2,i2)
+	| OJSGt (a1,b1,i1), OJSGt (a2,b2,i2)
+	| OJSLte (a1,b1,i1), OJSLte (a2,b2,i2)
+	| OJULt (a1,b1,i1), OJULt (a2,b2,i2)
+	| OJUGte (a1,b1,i1), OJUGte (a2,b2,i2)
+	| OJNotLt (a1,b1,i1), OJNotLt (a2,b2,i2)
+	| OJNotGte (a1,b1,i1), OJNotGte (a2,b2,i2)
+	| OJEq (a1,b1,i1), OJEq (a2,b2,i2)
+	| OJNotEq (a1,b1,i1), OJNotEq (a2,b2,i2)
+		-> a1 = a2 && b1 = b2 && i1 = i2
+	| OJAlways d1, OJAlways d2 -> d1 = d2
+	| OToDyn (r1,a1), OToDyn (r2,a2)
+	| OToSFloat (r1,a1), OToSFloat (r2,a2)
+	| OToUFloat (r1,a1), OToUFloat (r2,a2)
+	| OToInt (r1,a1), OToInt (r2,a2)
+		-> r1 = r2 && a1 = a2
+	| OSafeCast (r1,v1), OSafeCast (r2,v2)
+	| OUnsafeCast (r1,v1), OUnsafeCast (r2,v2)
+	| OToVirtual (r1,v1), OToVirtual (r2,v2)
+		-> r1 = r2 && v1 = v2
+	| OLabel _, OLabel _ -> true
+	| ORet r1, ORet r2 -> r1 = r2
+	| OThrow r1, OThrow r2
+	| ORethrow r1, ORethrow r2
+		-> r1 = r2
+	| OSwitch (r1,idx1,eend1), OSwitch (r2,idx2,eend2) -> r1 = r2 && idx1 = idx2 && eend1 = eend2
+	| ONullCheck r1, ONullCheck r2 -> r1 = r2
+	| OTrap (r1,i1), OTrap (r2,i2) -> r1 = r2 && i1 = i2
+	| OEndTrap b1, OEndTrap b2 -> b1 = b2
+	| OGetUI8 (r1,a1,b1), OGetUI8 (r2,a2,b2)
+	| OGetUI16 (r1,a1,b1), OGetUI16 (r2,a2,b2)
+	| OGetMem (r1,a1,b1), OGetMem (r2,a2,b2)
+	| OGetArray (r1,a1,b1), OGetArray (r2,a2,b2)
+	| OSetUI8 (r1,a1,b1), OSetUI8 (r2,a2,b2)
+	| OSetUI16 (r1,a1,b1), OSetUI16 (r2,a2,b2)
+	| OSetMem (r1,a1,b1), OSetMem (r2,a2,b2)
+	| OSetArray (r1,a1,b1), OSetArray (r2,a2,b2)
+		-> r1 = r2 && a1 = a2 && b1 = b2
+	| ONew r1, ONew r2 -> r1 = r2
+	| OArraySize (r1,a1), OArraySize (r2,a2) -> r1 = r2 && a1 = a2
+	| OType (r1,_), OType (r2,_) -> r1 = r2
+	| OGetType (r1,v1), OGetType (r2,v2)
+	| OGetTID (r1,v1), OGetTID (r2,v2)
+	| ORef (r1,v1), ORef (r2,v2)
+	| OUnref (v1,r1), OUnref (v2,r2)
+	| OSetref (r1,v1), OSetref (r2,v2)
+		-> r1 = r2 && v1 = v2
+	| OMakeEnum (r1,e1,pl1), OMakeEnum (r2,e2,pl2) -> r1 = r2 && e1 = e2 && pl1 = pl2
+	| OEnumAlloc (r1,e1), OEnumAlloc (r2,e2) -> r1 = r2 && e1 = e2
+	| OEnumIndex (r1,e1), OEnumIndex (r2,e2) -> r1 = r2 && e1 = e2
+	| OEnumField (r1,e1,i1,n1), OEnumField (r2,e2,i2,n2) -> r1 = r2 && e1 = e2 && i1 = i2 && n1 = n2
+	| OSetEnumField (e1,i1,r1), OSetEnumField (e2,i2,r2) -> r1 = r2 && e1 = e2 && i1 = i2
+	| OAssert _, OAssert _ -> true
+	| ORefData (r1,d1), ORefData (r2,d2) -> r1 = r2 && d1 = d2
+	| ORefOffset (r1,a1,off1), ORefOffset (r2,a2,off2) -> r1 = r2 && a1 = a2 && off1 = off2
+	| ONop s1, ONop s2 -> s1 = s2
+	| OPrefetch (r1,f1,mode1), OPrefetch (r2,f2,mode2) -> r1 = r2 && f1 = f2 && mode1 = mode2
+	| OAsm (mode1, value1, reg1), OAsm (mode2, value2, reg2) -> mode1 = mode2 && value1 = value2 && reg1 = reg2
+	| _ -> false
+
 type cache_elt = {
 	c_code : opcode array;
 	c_old_code : opcode array;
@@ -1059,26 +1177,18 @@ type cache_elt = {
 
 let opt_cache = ref PMap.empty
 let used_mark = ref 0
-let used_cache = ref 0
 
-let optimize comwarning dump get_str (f:fundecl) (hxf:Type.tfunc) =
+let optimize dump get_str (f:fundecl) (hxf:Type.tfunc) =
 	let sign = if f.fpath <> ("","") then fundecl_name f else (Printf.sprintf "%s:%d" hxf.tf_expr.epos.pfile hxf.tf_expr.epos.pmin) in
-	(* let sign = (Printf.sprintf "%s:%d:%d" (fundecl_name f) (Array.length f.code) (Array.length f.regs)) in *)
 	let old_code = Array.copy f.code in
-	(* let old_code = match dump with None -> f.code | Some _ -> Array.copy f.code in *)
 	try
 		let c = PMap.find sign (!opt_cache) in
 		c.c_last_used <- !used_mark;
 		if Array.length f.code <> Array.length c.c_code then raise Not_found;
 		Array.iteri (fun i op1 ->
 			let op2 = Array.unsafe_get f.code i in
-			if not (same_op op1 op2) then begin
-				(* comwarning (Printf.sprintf "Cache not match: %s / %s" (ostr string_of_int op1) (ostr string_of_int op2)) hxf.tf_expr.epos; *)
-				raise Not_found
-			end
+			if not (same_op op1 op2) then raise Not_found
 		) c.c_old_code;
-		(* comwarning (Printf.sprintf "Found cache %s" sign) hxf.tf_expr.epos; *)
-		(* raise Not_found; *)
 		let code = c.c_code in
 		Array.iter (fun i ->
 			let op = (match Array.unsafe_get code i, Array.unsafe_get f.code i with
@@ -1102,10 +1212,8 @@ let optimize comwarning dump get_str (f:fundecl) (hxf:Type.tfunc) =
 			| _ -> Globals.die "" __LOC__) in
 			Array.unsafe_set code i op
 		) c.c_remap_indexes;
-		incr used_cache;
 		remap_fun c.c_rctx { f with code = code } dump get_str old_code
 	with Not_found ->
-		let t = Timer.timer ["generate";"hl";"opt";"nocache"] in
 		let rctx = _optimize f in
 		let old_ops = f.code in
 		let fopt = remap_fun rctx f dump get_str old_code in
@@ -1132,12 +1240,10 @@ let optimize comwarning dump get_str (f:fundecl) (hxf:Type.tfunc) =
 			c_last_used = !used_mark;
 			c_remap_indexes = DynArray.to_array idxs;
 		} (!opt_cache);
-		t();
 		fopt
 
 let clean_cache() =
 	PMap.iter (fun k c ->
-		if !used_mark - c.c_last_used > 2 then opt_cache := PMap.remove k !opt_cache;
+		if !used_mark - c.c_last_used > 3 then opt_cache := PMap.remove k !opt_cache;
 	) (!opt_cache);
-	used_cache := 0;
 	incr used_mark

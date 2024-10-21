@@ -3269,7 +3269,6 @@ and gen_method_wrapper ctx rt t p =
 		fid
 
 and make_fun ?gen_content ctx name fidx f cthis cparent =
-	let t = Timer.timer ["generate";"hl";"add_types";"make_fun"] in
 	let old = ctx.m in
 	let capt = build_capture_vars ctx f in
 	let has_captured_vars = Array.length capt.c_vars > 0 in
@@ -3399,9 +3398,7 @@ and make_fun ?gen_content ctx name fidx f cthis cparent =
 	| None -> ()
 	| Some f -> f());
 
-	let t_eval = Timer.timer ["generate";"hl";"add_types";"eval_expr"] in
 	ignore(eval_expr ctx f.tf_expr);
-	t_eval();
 	let tret = to_type ctx f.tf_type in
 	let rec has_final_jump e =
 		(* prevents a jump outside function bounds error *)
@@ -3437,14 +3434,13 @@ and make_fun ?gen_content ctx name fidx f cthis cparent =
 	Hashtbl.add ctx.defined_funs fidx ();
 	let f = if ctx.optimize && (gen_content = None || name <> ("","")) then begin
 		let t = Timer.timer ["generate";"hl";"opt"] in
-		let f = Hlopt.optimize (ctx.com.warning WGenerator []) ctx.dump_out (DynArray.get ctx.cstrings.arr) hlf f in
+		let f = Hlopt.optimize ctx.dump_out (DynArray.get ctx.cstrings.arr) hlf f in
 		t();
 		f
 	end else
 		hlf
 	in
 	DynArray.add ctx.cfunctions f;
-	t();
 	capt
 
 let generate_static ctx c f =
@@ -4214,9 +4210,7 @@ let add_types ctx types =
 			) c.cl_meta;
  		| _ -> ()
 	) types;
-	let t = Timer.timer ["generate";"hl";"add_types";"generate_type"] in
-	List.iter (generate_type ctx) types;
-	t()
+	List.iter (generate_type ctx) types
 
 let build_code ctx types main =
 	let ep = generate_static_init ctx types main in
@@ -4248,9 +4242,7 @@ let make_context_sign com =
 		Hashtbl.add mhash mid true
 	) com.types;
 	let data = Marshal.to_string mhash [No_sharing] in
-	let hex = Digest.to_hex (Digest.string data) in
-	com.warning WGenerator [] (Printf.sprintf "count %d; \nmake_context_sign: %s" (List.length com.types)hex) {pfile = "make_context_string"; pmin = 0; pmax = 0;} ;
-	hex
+	Digest.to_hex (Digest.string data)
 
 let prev_sign = ref "" and prev_data = ref ""
 
@@ -4268,17 +4260,13 @@ let generate com =
 
 	let ctx = create_context com dump in
 	add_types ctx com.types;
-	let t = Timer.timer ["generate";"hl";"build_code"] in
 	let code = build_code ctx com.types com.main.main_expr in
 	Array.sort (fun (lib1,_,_,_) (lib2,_,_,_) -> lib1 - lib2) code.natives;
-	t();
 	if dump then begin
-		let t = Timer.timer ["generate";"hl";"write dump"] in
 		(match ctx.dump_out with None -> () | Some ch -> IO.close_out ch);
 		let ch = open_out_bin "dump/hlcode.txt" in
 		Hlcode.dump (fun s -> output_string ch (s ^ "\n")) code;
 		close_out ch;
-		t();
 	end;
 	(*if Common.raw_defined com "hl_dump_spec" then begin
 		let ch = open_out_bin "dump/hlspec.txt" in
@@ -4292,10 +4280,8 @@ let generate com =
 		close_out ch;
 	end;*)
 	if hl_check then begin
-		let t = Timer.timer ["generate";"hl";"check"] in
 		check ctx;
 		Hlinterp.check com.error code;
-		t();
 	end;
 	let t = Timer.timer ["generate";"hl";"write"] in
 
@@ -4328,13 +4314,10 @@ let generate com =
 		prev_sign := sign;
 		prev_data := str;
 	end;
-	com.warning WGenerator [] (Printf.sprintf "used_cache: %d" (!Hlopt.used_cache)) {pfile = "make_context_string"; pmin = 0; pmax = 0;} ;
 	Hlopt.clean_cache();
 	t();
 	if Common.raw_defined com "run" then begin
-		let t = Timer.timer ["generate";"hl";"run"] in
 		if com.run_command_args "haxelib" ["run";"hashlink";"run";escape_command com.file] <> 0 then failwith "Failed to run HL";
-		t();
 	end;
 	if Common.defined com Define.Interp then
 		try
