@@ -1178,16 +1178,16 @@ type cache_elt = {
 let opt_cache = ref PMap.empty
 let used_mark = ref 0
 
-let optimize dump get_str (f:fundecl) (hxf:Type.tfunc) =
+let optimize dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
 	let sign = if f.fpath <> ("","") then fundecl_name f else (Printf.sprintf "%s:%d" hxf.tf_expr.epos.pfile hxf.tf_expr.epos.pmin) in
-	let old_code = Array.copy f.code in
 	try
+		if not usecache then raise Not_found;
 		let c = PMap.find sign (!opt_cache) in
 		c.c_last_used <- !used_mark;
 		if Array.length f.code <> Array.length c.c_code then raise Not_found;
 		Array.iteri (fun i op1 ->
 			let op2 = Array.unsafe_get f.code i in
-			if not (same_op op1 op2) then raise Not_found
+			if not (same_op op1 op2) then raise Not_found;
 		) c.c_old_code;
 		let code = c.c_code in
 		Array.iter (fun i ->
@@ -1212,8 +1212,9 @@ let optimize dump get_str (f:fundecl) (hxf:Type.tfunc) =
 			| _ -> Globals.die "" __LOC__) in
 			Array.unsafe_set code i op
 		) c.c_remap_indexes;
-		remap_fun c.c_rctx { f with code = code } dump get_str old_code
+		remap_fun c.c_rctx { f with code = code } dump get_str f.code
 	with Not_found ->
+		let old_code = match dump, usecache with None, true | Some _, _ -> Array.copy f.code | _ -> f.code in
 		let rctx = _optimize f in
 		let old_ops = f.code in
 		let fopt = remap_fun rctx f dump get_str old_code in
@@ -1233,7 +1234,7 @@ let optimize dump get_str (f:fundecl) (hxf:Type.tfunc) =
 				DynArray.add idxs i
 			| _ -> ()
 		) old_ops;
-		opt_cache := PMap.add sign {
+		if usecache then opt_cache := PMap.add sign {
 			c_code = old_ops;
 			c_old_code = old_code;
 			c_rctx = rctx;
