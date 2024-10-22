@@ -1168,8 +1168,8 @@ let same_op op1 op2 =
 	| _ -> false
 
 type cache_elt = {
-	c_code : opcode array;
 	c_old_code : opcode array;
+	c_code : opcode array;
 	c_rctx : rctx;
 	c_remap_indexes : int array;
 	mutable c_last_used : int;
@@ -1235,8 +1235,8 @@ let optimize dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
 			| _ -> ()
 		) old_ops;
 		if usecache then opt_cache := PMap.add sign {
-			c_code = old_ops;
 			c_old_code = old_code;
+			c_code = old_ops;
 			c_rctx = rctx;
 			c_last_used = !used_mark;
 			c_remap_indexes = DynArray.to_array idxs;
