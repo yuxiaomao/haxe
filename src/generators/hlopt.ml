@@ -1082,7 +1082,7 @@ type cache_elt = {
 }
 
 type cache_node = {
-	mutable next : (opcode * cache_node) list;
+	mutable next : (opcode, cache_node) Hashtbl.t;
 	mutable value : cache_elt option;
 }
 
@@ -1091,19 +1091,19 @@ let rec get_cache_node root index code =
 	let op = op_remove_index (Array.get code index) in
 	let node =
 		try
-			snd (List.find (fun (op1,_) -> op1 = op) root.next)
+			Hashtbl.find root.next op
 		with Not_found ->
 			let new_node = {
-				next = [];
+				next = Hashtbl.create 0;
 				value = None;
 			} in
-			root.next <- (op, new_node) :: root.next;
+			Hashtbl.add root.next op new_node;
 			new_node
 		in
 	get_cache_node node (index+1) code
 
 let opt_cache = {
-	next = [];
+	next = Hashtbl.create 0;
 	value = None;
 }
 
