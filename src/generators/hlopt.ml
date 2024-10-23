@@ -539,7 +539,7 @@ type rctx = {
 	r_blocks_pos : (int, block) Hashtbl.t;
 	r_reg_moved : (int, (int * int)) Hashtbl.t;
 	r_live_bits : int array;
-	r_reg_map : int array;
+	mutable r_reg_map : int array;
 }
 
 let remap_fun ctx f dump get_str old_code =
@@ -1183,12 +1183,22 @@ let optimize dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
 	try
 		if not usecache then raise Not_found;
 		let c = PMap.find sign (!opt_cache) in
-		c.c_last_used <- !used_mark;
 		if Array.length f.code <> Array.length c.c_code then raise Not_found;
 		Array.iteri (fun i op1 ->
 			let op2 = Array.unsafe_get f.code i in
 			if not (same_op op1 op2) then raise Not_found;
 		) c.c_old_code;
+		c.c_last_used <- !used_mark;
+		(* extend r_reg_map when code is identical, but f has some unused regs at the end *)
+		let nregs = Array.length f.regs in
+		let noldregs = Array.length c.c_rctx.r_reg_map in
+		if nregs > noldregs then begin
+			let new_reg_map = Array.make nregs (-1) in
+			for i = 0 to noldregs - 1 do
+				new_reg_map.(i) <- c.c_rctx.r_reg_map.(i);
+			done;
+			c.c_rctx.r_reg_map <- new_reg_map;
+		end;
 		let code = c.c_code in
 		Array.iter (fun i ->
 			let op = (match Array.unsafe_get code i, Array.unsafe_get f.code i with
