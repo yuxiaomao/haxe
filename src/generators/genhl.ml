@@ -3435,7 +3435,7 @@ and make_fun ?gen_content ctx name fidx f cthis cparent =
 	Hashtbl.add ctx.defined_funs fidx ();
 	let f = if ctx.optimize && (gen_content = None || name <> ("","")) then begin
 		let t = Timer.timer ["generate";"hl";"opt"] in
-		let f = Hlopt.optimize ctx.dump_out ctx.opt_cache (DynArray.get ctx.cstrings.arr) hlf f in
+		let f = Hlopt.optimize (ctx.com.warning WGenerator []) ctx.dump_out ctx.opt_cache (DynArray.get ctx.cstrings.arr) hlf f in
 		t();
 		f
 	end else
@@ -4263,6 +4263,7 @@ let generate com =
 	let ctx = create_context com dump in
 	add_types ctx com.types;
 	let code = build_code ctx com.types com.main.main_expr in
+	ctx.com.warning WGenerator [] (Printf.sprintf "count %d" !Hlopt.fcount) {pfile = "opt_fcount"; pmin = 0; pmax = 0;} ;
 	Array.sort (fun (lib1,_,_,_) (lib2,_,_,_) -> lib1 - lib2) code.natives;
 	if dump then begin
 		(match ctx.dump_out with None -> () | Some ch -> IO.close_out ch);

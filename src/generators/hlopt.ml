@@ -1074,26 +1074,49 @@ let op_remove_index op =
 	op_replace_index op 0 HVoid
 
 type cache_elt = {
-	c_old_code : opcode array;
+	c_old_findex : int;
 	c_code : opcode array;
 	c_rctx : rctx;
 	c_remap_indexes : int array;
 	mutable c_last_used : int;
 }
 
-let opt_cache = ref PMap.empty
-let used_mark = ref 0
+type cache_node = {
+	mutable next : (opcode * cache_node) list;
+	mutable value : cache_elt option;
+}
 
-let optimize dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
-	let sign = if f.fpath <> ("","") then fundecl_name f else (Printf.sprintf "%s:%d" hxf.tf_expr.epos.pfile hxf.tf_expr.epos.pmin) in
+let rec get_cache_node root index code =
+	if Array.length code = index then root else
+	let op = op_remove_index (Array.get code index) in
+	let node =
+		try
+			snd (List.find (fun (op1,_) -> op1 = op) root.next)
+		with Not_found ->
+			let new_node = {
+				next = [];
+				value = None;
+			} in
+			root.next <- (op, new_node) :: root.next;
+			new_node
+		in
+	get_cache_node node (index+1) code
+
+let opt_cache = {
+	next = [];
+	value = None;
+}
+
+let used_mark = ref 0
+let fcount = ref 0
+
+let optimize comwarning dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
+	(* use opt_cache as null value *)
+	let node = if usecache then (get_cache_node opt_cache 0 f.code) else opt_cache in
 	try
 		if not usecache then raise Not_found;
-		let c = PMap.find sign (!opt_cache) in
-		if Array.length f.code <> Array.length c.c_code then raise Not_found;
-		Array.iteri (fun i op1 ->
-			let op2 = Array.unsafe_get f.code i in
-			if op_remove_index op1 <> op_remove_index op2 then raise Not_found;
-		) c.c_old_code;
+		let c = (match node.value with Some elt -> elt | _ -> raise Not_found) in
+		if Array.length f.code <> Array.length c.c_code then Globals.die "" __LOC__;
 		c.c_last_used <- !used_mark;
 		(* extend r_reg_map when code is identical but f has some unused regs at the end *)
 		let nregs = Array.length f.regs in
@@ -1105,6 +1128,7 @@ let optimize dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
 			done;
 			c.c_rctx.r_reg_map <- new_reg_map;
 		end;
+		if f.findex <> c.c_old_findex then incr fcount;
 		let code = c.c_code in
 		Array.iter (fun i ->
 			let op = (match Array.unsafe_get code i, Array.unsafe_get f.code i with
@@ -1125,12 +1149,13 @@ let optimize dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
 			| ODynGet (r,o,_), ODynGet (_,_,idx) -> ODynGet (r,o,idx)
 			| ODynSet (o,_,v), ODynSet (_,idx,_) -> ODynSet (o,idx,v)
 			| OType (r,_), OType (_,t) -> OType (r,t)
+			(* can we also map field index ? *)
 			| _ -> Globals.die "" __LOC__) in
 			Array.unsafe_set code i op
 		) c.c_remap_indexes;
 		remap_fun c.c_rctx { f with code = code } dump get_str f.code
 	with Not_found ->
-		let old_code = match dump, usecache with None, true | Some _, _ -> Array.copy f.code | _ -> f.code in
+		let old_code = match dump with Some _ -> Array.copy f.code | _ -> f.code in
 		let rctx = _optimize f in
 		let old_ops = f.code in
 		let fopt = remap_fun rctx f dump get_str old_code in
@@ -1150,17 +1175,20 @@ let optimize dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
 				DynArray.add idxs i
 			| _ -> ()
 		) old_ops;
-		if usecache then opt_cache := PMap.add sign {
-			c_old_code = old_code;
-			c_code = old_ops;
-			c_rctx = rctx;
-			c_last_used = !used_mark;
-			c_remap_indexes = DynArray.to_array idxs;
-		} (!opt_cache);
+		if usecache then begin
+			let elt = {
+				c_old_findex = f.findex;
+				c_code = old_ops;
+				c_rctx = rctx;
+				c_remap_indexes = DynArray.to_array idxs;
+				c_last_used = !used_mark;
+			} in
+			node.value <- Some elt
+		end;
 		fopt
 
 let clean_cache() =
-	PMap.iter (fun k c ->
+	(* PMap.iter (fun k c ->
 		if !used_mark - c.c_last_used > 3 then opt_cache := PMap.remove k !opt_cache;
-	) (!opt_cache);
+	) (!opt_cache); *)
 	incr used_mark
