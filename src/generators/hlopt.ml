@@ -1083,6 +1083,7 @@ let same_op op1 op2 =
 
 type cache_elt = {
 	c_old_code : opcode array;
+	c_old_fnargs : int;
 	c_code : opcode array;
 	c_rctx : rctx;
 	c_remap_indexes : int array;
@@ -1093,12 +1094,14 @@ let opt_cache = ref PMap.empty
 let used_mark = ref 0
 
 let optimize dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
+	let old_nargs = (match f.ftype with HFun (args,_) -> List.length args | _ -> Globals.die "" __LOC__) in
 	let sign = if f.fpath <> ("","") then fundecl_name f else (Printf.sprintf "%s:%d" hxf.tf_expr.epos.pfile hxf.tf_expr.epos.pmin) in
 	try
 		if not usecache then raise Not_found;
 		let c = PMap.find sign (!opt_cache) in
 		if Array.length f.code <> Array.length c.c_code then raise Not_found;
 		if Array.length f.regs <> Array.length c.c_rctx.r_reg_map then raise Not_found;
+		if old_nargs <> c.c_old_fnargs then raise Not_found;
 		Array.iteri (fun i op1 ->
 			let op2 = Array.unsafe_get f.code i in
 			if not (same_op op1 op2) then raise Not_found;
@@ -1166,6 +1169,7 @@ let optimize dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
 		) old_ops;
 		if usecache then opt_cache := PMap.add sign {
 			c_old_code = old_code;
+			c_old_fnargs = old_nargs;
 			c_code = old_ops;
 			c_rctx = rctx;
 			c_last_used = !used_mark;
