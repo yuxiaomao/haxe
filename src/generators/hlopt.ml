@@ -1053,7 +1053,6 @@ let same_op op1 op2 =
 	match op1, op2 with
 	| OInt (r1,_), OInt (r2, _) -> r1 = r2
 	| OFloat (r1,_), OFloat (r2,_) -> r1 = r2
-	| OBool (r1,b1), OBool (r2,b2) -> r1 = r2 && b1 = b2
 	| OBytes (r1,_), OBytes (r2,_) -> r1 = r2
 	| OString (r1,_), OString (r2,_) -> r1 = r2
 	| OCall0 (r1,_), OCall0 (r2,_) -> r1 = r2
