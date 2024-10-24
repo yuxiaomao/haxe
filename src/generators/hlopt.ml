@@ -1061,13 +1061,24 @@ let same_op op1 op2 =
 	| OCall3 (r1,_,a1,b1,c1), OCall3 (r2,_,a2,b2,c2) -> r1 = r2 && a1 = a2 && b1 = b2 && c1 = c2
 	| OCall4 (r1,_,a1,b1,c1,d1), OCall4 (r2,_,a2,b2,c2,d2) -> r1 = r2 && a1 = a2 && b1 = b2 && c1 = c2 && d1 = d2
 	| OCallN (r1,_,rl1), OCallN (r2,_,rl2) -> r1 = r2 && rl1 = rl2
+	| OCallMethod (r1,_,rl1), OCallMethod (r2,_,rl2) -> r1 = r2 && rl1 = rl2
+	| OCallThis (r1,_,rl1), OCallThis (r2,_,rl2) -> r1 = r2 && rl1 = rl2
 	| OStaticClosure (r1,_), OStaticClosure (r2,_) -> r1 = r2
 	| OInstanceClosure (r1,_,v1), OInstanceClosure (r2,_,v2) -> r1 = r2 && v1 = v2
+	| OVirtualClosure (r1,o1,_), OVirtualClosure (r2,o2,_) -> r1 = r2 && o1 = o2
 	| OGetGlobal (r1,_), OGetGlobal (r2,_) -> r1 = r2
 	| OSetGlobal (_,r1), OSetGlobal (_,r2) -> r1 = r2
+	| OField (r1,o1,_), OField (r2,o2,_) -> r1 = r2 && o1 = o2
+	| OSetField (o1,_,r1), OSetField (o2,_,r2) -> r1 = r2 && o1 = o2
+	| OGetThis (r1,_), OGetThis (r2,_) -> r1 = r2
+	| OSetThis (_,r1), OSetThis (_,r2) -> r1 = r2
 	| ODynGet (r1,o1,_), ODynGet (r2,o2,_) -> r1 = r2 && o1 = o2
 	| ODynSet (o1,_,v1), ODynSet (o2,_,v2) -> o1 = o2 && v1 = v2
 	| OType (r1,_), OType (r2,_) -> r1 = r2
+	| OMakeEnum (r1,_,pl1), OMakeEnum (r2,_,pl2) -> r1 = r2 && pl1 = pl2
+	| OEnumAlloc (r1,_), OEnumAlloc (r2,_) -> r1 = r2
+	| OEnumField (r1,e1,_,n1), OEnumField (r2,e2,_,n2) -> r1 = r2 && e1 = e2 && n1 = n2
+	| OPrefetch (r1,_,mode1), OPrefetch (r2,_,mode2) -> r1 = r2 && mode1 = mode2
 	| _ -> op1 = op2
 
 type cache_elt = {
@@ -1106,13 +1117,24 @@ let optimize dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
 			| OCall3 (r,_,a,b,c), OCall3 (_,idx,_,_,_) -> OCall3 (r,idx,a,b,c)
 			| OCall4 (r,_,a,b,c,d), OCall4 (_,idx,_,_,_,_) -> OCall4 (r,idx,a,b,c,d)
 			| OCallN (r,_,pl), OCallN (_,idx,_) -> OCallN (r,idx,pl)
+			| OCallMethod (r,_,rl), OCallMethod (_,fid,_) -> OCallMethod (r,fid,rl)
+			| OCallThis (r,_,rl), OCallThis (_,fid,_) -> OCallThis (r,fid,rl)
 			| OStaticClosure (r,_), OStaticClosure (_,idx) -> OStaticClosure (r,idx)
 			| OInstanceClosure (r,_,v), OInstanceClosure (_,idx,_) -> OInstanceClosure (r,idx,v)
+			| OVirtualClosure (r,o,_), OVirtualClosure (_,_,fid) -> OVirtualClosure (r,o,fid)
 			| OGetGlobal (r,_), OGetGlobal (_,g) -> OGetGlobal (r,g)
 			| OSetGlobal (_,v), OSetGlobal (g,_) -> OSetGlobal (g,v)
+			| OField (r,o,_), OField (_,_,fid) -> OField (r,o,fid)
+			| OSetField (o,_,r), OSetField (_,fid,_) -> OSetField (o,fid,r)
+			| OGetThis (r,_), OGetThis (_,fid) -> OGetThis (r,fid)
+			| OSetThis (_,r), OSetThis (fid,_) ->  OSetThis (fid,r)
 			| ODynGet (r,o,_), ODynGet (_,_,idx) -> ODynGet (r,o,idx)
 			| ODynSet (o,_,v), ODynSet (_,idx,_) -> ODynSet (o,idx,v)
 			| OType (r,_), OType (_,t) -> OType (r,t)
+			| OMakeEnum (r,_,pl), OMakeEnum (_,fid,_) -> OMakeEnum (r,fid,pl)
+			| OEnumAlloc (r,_), OEnumAlloc (_,fid) -> OEnumAlloc (r,fid)
+			| OEnumField (r,e,_,n), OEnumField (_,_,fid,_) -> OEnumField (r,e,fid,n)
+			| OPrefetch (r,_,mode), OPrefetch (_,fid,_) -> OPrefetch (r,fid,mode)
 			| _ -> Globals.die "" __LOC__) in
 			Array.unsafe_set code i op
 		) c.c_remap_indexes;
@@ -1133,8 +1155,12 @@ let optimize dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
 		Array.iteri (fun i op ->
 			match op with
 			| OInt _ | OFloat _ | OBytes _ | OString _
-			| OCall0 _ | OCall1 _ | OCall2 _ | OCall3 _ | OCall4 _ | OCallN _ | OStaticClosure _
-			| OInstanceClosure _ | OGetGlobal _	| OSetGlobal _ | ODynGet _ | ODynSet _	| OType _ ->
+			| OCall0 _ | OCall1 _ | OCall2 _ | OCall3 _ | OCall4 _ | OCallN _
+			| OCallMethod _ | OCallThis _ | OStaticClosure _ | OInstanceClosure _
+			| OVirtualClosure _ | OGetGlobal _ | OSetGlobal _
+			| OField _ | OSetField _ | OGetThis _ | OSetThis _
+			| ODynGet _ | ODynSet _	| OType _
+			| OMakeEnum _ | OEnumAlloc _ | OEnumField _ | OPrefetch _ ->
 				DynArray.add idxs i
 			| _ -> ()
 		) old_ops;
