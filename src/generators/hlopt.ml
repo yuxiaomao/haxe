@@ -1080,42 +1080,17 @@ type cache_elt = {
 	c_remap_indexes : int array;
 	mutable c_last_used : int;
 }
-
-type cache_node = {
-	mutable next : (opcode, cache_node) Hashtbl.t;
-	mutable value : cache_elt option;
-}
-
-let rec get_cache_node root index code =
-	if Array.length code = index then root else
-	let op = op_remove_index (Array.get code index) in
-	let node =
-		try
-			Hashtbl.find root.next op
-		with Not_found ->
-			let new_node = {
-				next = Hashtbl.create 0;
-				value = None;
-			} in
-			Hashtbl.add root.next op new_node;
-			new_node
-		in
-	get_cache_node node (index+1) code
-
-let opt_cache = {
-	next = Hashtbl.create 0;
-	value = None;
-}
+let opt_cache = Hashtbl.create 0
 
 let used_mark = ref 0
 let fcount = ref 0
 
 let optimize comwarning dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
 	(* use opt_cache as null value *)
-	let node = if usecache then (get_cache_node opt_cache 0 f.code) else opt_cache in
+	let key = if usecache then Array.map (fun op -> op_remove_index op) f.code else [||] in
 	try
 		if not usecache then raise Not_found;
-		let c = (match node.value with Some elt -> elt | _ -> raise Not_found) in
+		let c = Hashtbl.find opt_cache key in
 		if Array.length f.code <> Array.length c.c_code then Globals.die "" __LOC__;
 		c.c_last_used <- !used_mark;
 		(* extend r_reg_map when code is identical but f has some unused regs at the end *)
@@ -1128,7 +1103,7 @@ let optimize comwarning dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
 			done;
 			c.c_rctx.r_reg_map <- new_reg_map;
 		end;
-		if f.findex <> c.c_old_findex then incr fcount;
+		incr fcount;
 		let code = c.c_code in
 		Array.iter (fun i ->
 			let op = (match Array.unsafe_get code i, Array.unsafe_get f.code i with
@@ -1183,12 +1158,12 @@ let optimize comwarning dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
 				c_remap_indexes = DynArray.to_array idxs;
 				c_last_used = !used_mark;
 			} in
-			node.value <- Some elt
+			Hashtbl.replace opt_cache key elt
 		end;
 		fopt
 
 let clean_cache() =
-	(* PMap.iter (fun k c ->
-		if !used_mark - c.c_last_used > 3 then opt_cache := PMap.remove k !opt_cache;
-	) (!opt_cache); *)
+	Hashtbl.iter (fun k c ->
+		if !used_mark - c.c_last_used > 3 then Hashtbl.remove opt_cache k;
+	) opt_cache;
 	incr used_mark
