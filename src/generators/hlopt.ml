@@ -1049,7 +1049,7 @@ let _optimize (f:fundecl) =
 		r_reg_moved = reg_moved;
 	}
 
-let op_replace_index op nidx ntype =
+let op_replace_index nidx nfid ntype op =
 	match op with
 	| OInt (r,idx) -> OInt (r,nidx)
 	| OFloat (r,idx) -> OFloat (r,nidx)
@@ -1061,17 +1061,28 @@ let op_replace_index op nidx ntype =
 	| OCall3 (r,idx,a,b,c) -> OCall3 (r,nidx,a,b,c)
 	| OCall4 (r,idx,a,b,c,d) -> OCall4 (r,nidx,a,b,c,d)
 	| OCallN (r,idx,pl) -> OCallN (r,nidx,pl)
+	| OCallMethod (r,fid,rl) -> OCallMethod (r,nfid,rl)
+	| OCallThis (r,fid,rl) -> OCallThis (r,nfid,rl)
 	| OStaticClosure (r,idx) -> OStaticClosure (r,nidx)
 	| OInstanceClosure (r,idx,v) -> OInstanceClosure (r,nidx,v)
+	| OVirtualClosure (r,o,fid) -> OVirtualClosure (r,o,nfid)
 	| OGetGlobal (r,idx) -> OGetGlobal (r,nidx)
 	| OSetGlobal (idx,v) -> OSetGlobal (nidx,v)
+	| OField (r,o,fid) -> OField (r,o,nfid)
+	| OSetField (o,fid,r) -> OSetField (o,nfid,r)
+	| OGetThis (r,fid) -> OGetThis (r,nfid)
+	| OSetThis (fid,r) -> OSetThis (nfid,r)
 	| ODynGet (r,o,idx) -> ODynGet (r,o,nidx)
 	| ODynSet (o,idx,v) -> ODynSet (o,nidx,v)
 	| OType (r,t) -> OType (r,ntype)
+	| OMakeEnum (r,fid,pl) -> OMakeEnum (r,nfid,pl)
+	| OEnumAlloc (r,fid) -> OEnumAlloc (r,nfid)
+	| OEnumField (r,e,fid,n) -> OEnumField (r,e,nfid,n)
+	| OPrefetch (r,fid,mode) -> OPrefetch (r,nfid,mode)
 	| _ -> op
 
 let op_remove_index op =
-	op_replace_index op 0 HVoid
+	op_replace_index 0 0 HVoid op
 
 type cache_elt = {
 	c_old_findex : int;
@@ -1117,14 +1128,24 @@ let optimize comwarning dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
 			| OCall3 (r,_,a,b,c), OCall3 (_,idx,_,_,_) -> OCall3 (r,idx,a,b,c)
 			| OCall4 (r,_,a,b,c,d), OCall4 (_,idx,_,_,_,_) -> OCall4 (r,idx,a,b,c,d)
 			| OCallN (r,_,pl), OCallN (_,idx,_) -> OCallN (r,idx,pl)
+			| OCallMethod (r,_,rl), OCallMethod (_,fid,_) -> OCallMethod (r,fid,rl)
+			| OCallThis (r,_,rl), OCallThis (_,fid,_) -> OCallThis (r,fid,rl)
 			| OStaticClosure (r,_), OStaticClosure (_,idx) -> OStaticClosure (r,idx)
 			| OInstanceClosure (r,_,v), OInstanceClosure (_,idx,_) -> OInstanceClosure (r,idx,v)
+			| OVirtualClosure (r,o,_), OVirtualClosure (_,_,fid) -> OVirtualClosure (r,o,fid)
 			| OGetGlobal (r,_), OGetGlobal (_,g) -> OGetGlobal (r,g)
 			| OSetGlobal (_,v), OSetGlobal (g,_) -> OSetGlobal (g,v)
+			| OField (r,o,_), OField (_,_,fid) -> OField (r,o,fid)
+			| OSetField (o,_,r), OSetField (_,fid,_) -> OSetField (o,fid,r)
+			| OGetThis (r,_), OGetThis (_,fid) -> OGetThis (r,fid)
+			| OSetThis (_,r), OSetThis (fid,_) ->  OSetThis (fid,r)
 			| ODynGet (r,o,_), ODynGet (_,_,idx) -> ODynGet (r,o,idx)
 			| ODynSet (o,_,v), ODynSet (_,idx,_) -> ODynSet (o,idx,v)
 			| OType (r,_), OType (_,t) -> OType (r,t)
-			(* can we also map field index ? *)
+			| OMakeEnum (r,_,pl), OMakeEnum (_,fid,_) -> OMakeEnum (r,fid,pl)
+			| OEnumAlloc (r,_), OEnumAlloc (_,fid) -> OEnumAlloc (r,fid)
+			| OEnumField (r,e,_,n), OEnumField (_,_,fid,_) -> OEnumField (r,e,fid,n)
+			| OPrefetch (r,_,mode), OPrefetch (_,fid,_) -> OPrefetch (r,fid,mode)
 			| _ -> Globals.die "" __LOC__) in
 			Array.unsafe_set code i op
 		) c.c_remap_indexes;
@@ -1145,8 +1166,12 @@ let optimize comwarning dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
 		Array.iteri (fun i op ->
 			match op with
 			| OInt _ | OFloat _ | OBytes _ | OString _
-			| OCall0 _ | OCall1 _ | OCall2 _ | OCall3 _ | OCall4 _ | OCallN _ | OStaticClosure _
-			| OInstanceClosure _ | OGetGlobal _	| OSetGlobal _ | ODynGet _ | ODynSet _	| OType _ ->
+			| OCall0 _ | OCall1 _ | OCall2 _ | OCall3 _ | OCall4 _ | OCallN _
+			| OCallMethod _ | OCallThis _ | OStaticClosure _ | OInstanceClosure _
+			| OVirtualClosure _ | OGetGlobal _ | OSetGlobal _
+			| OField _ | OSetField _ | OGetThis _ | OSetThis _
+			| ODynGet _ | ODynSet _	| OType _
+			| OMakeEnum _ | OEnumAlloc _ | OEnumField _ | OPrefetch _ ->
 				DynArray.add idxs i
 			| _ -> ()
 		) old_ops;
