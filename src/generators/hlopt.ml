@@ -1099,14 +1099,14 @@ let fcount = ref 0
 
 let optimize comwarning dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
 	(* use opt_cache as null value *)
+	let old_nargs = (match f.ftype with HFun (args,_) -> List.length args | _ -> Globals.die "" __LOC__) in
 	let key = if usecache then Array.map (fun op -> op_remove_index op) f.code else [||] in
 	try
 		if not usecache then raise Not_found;
 		let c = Hashtbl.find opt_cache key in
 		if Array.length f.code <> Array.length c.c_code then Globals.die "" __LOC__;
 		(* prevent args > used reg when sharing the cache *)
-		let nargs = (match f.ftype with HFun (args,_) -> List.length args | _ -> Globals.die "" __LOC__) in
-		if nargs <> c.c_old_fnargs then raise Not_found;
+		if old_nargs <> c.c_old_fnargs then raise Not_found;
 		(* extend r_reg_map when code is identical but f has some unused regs at the end *)
 		let nregs = Array.length f.regs in
 		let noldregs = Array.length c.c_rctx.r_reg_map in
@@ -1183,7 +1183,7 @@ let optimize comwarning dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
 		if usecache then begin
 			let elt = {
 				c_old_findex = f.findex;
-				c_old_fnargs = (match f.ftype with HFun (args,_) -> List.length args | _ -> Globals.die "" __LOC__);
+				c_old_fnargs = old_nargs;
 				c_code = old_ops;
 				c_rctx = rctx;
 				c_remap_indexes = DynArray.to_array idxs;
