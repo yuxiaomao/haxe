@@ -1086,6 +1086,7 @@ let op_remove_index op =
 
 type cache_elt = {
 	c_old_findex : int;
+	c_old_fnargs : int;
 	c_code : opcode array;
 	c_rctx : rctx;
 	c_remap_indexes : int array;
@@ -1103,7 +1104,9 @@ let optimize comwarning dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
 		if not usecache then raise Not_found;
 		let c = Hashtbl.find opt_cache key in
 		if Array.length f.code <> Array.length c.c_code then Globals.die "" __LOC__;
-		c.c_last_used <- !used_mark;
+		(* prevent args > used reg when sharing the cache *)
+		let nargs = (match f.ftype with HFun (args,_) -> List.length args | _ -> Globals.die "" __LOC__) in
+		if nargs <> c.c_old_fnargs then raise Not_found;
 		(* extend r_reg_map when code is identical but f has some unused regs at the end *)
 		let nregs = Array.length f.regs in
 		let noldregs = Array.length c.c_rctx.r_reg_map in
@@ -1115,7 +1118,9 @@ let optimize comwarning dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
 			c.c_rctx.r_reg_map <- new_reg_map;
 		end;
 		incr fcount;
-		let code = c.c_code in
+		(* prevent overwrite c_code - maybe return by remap_fun, if share cache with another function in the same run *)
+		let code = if c.c_last_used = !used_mark then Array.copy c.c_code else c.c_code in
+		c.c_last_used <- !used_mark;
 		Array.iter (fun i ->
 			let op = (match Array.unsafe_get code i, Array.unsafe_get f.code i with
 			| OInt (r,_), OInt (_,idx) -> OInt (r,idx)
@@ -1178,6 +1183,7 @@ let optimize comwarning dump usecache get_str (f:fundecl) (hxf:Type.tfunc) =
 		if usecache then begin
 			let elt = {
 				c_old_findex = f.findex;
+				c_old_fnargs = (match f.ftype with HFun (args,_) -> List.length args | _ -> Globals.die "" __LOC__);
 				c_code = old_ops;
 				c_rctx = rctx;
 				c_remap_indexes = DynArray.to_array idxs;
