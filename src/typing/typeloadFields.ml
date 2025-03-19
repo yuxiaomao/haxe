@@ -1018,11 +1018,11 @@ let check_abstract (ctx,cctx,fctx) a c cf fd t ret p =
 		in
 		begin match follow t with
 			| TFun((_,_,t1) :: (_,_,t2) :: args,_) when is_empty_or_pos_infos args ->
-				if a.a_read <> None then raise_typing_error "Multiple resolve-read methods are not supported" cf.cf_pos;
+				if a.a_read <> None then display_error ctx.com "Multiple resolve-read methods are not supported" cf.cf_pos;
 				check_fun t1 t2;
 				a.a_read <- Some cf;
 			| TFun((_,_,t1) :: (_,_,t2) :: (_,_,t3) :: args,_) when is_empty_or_pos_infos args ->
-				if a.a_write <> None then raise_typing_error "Multiple resolve-write methods are not supported" cf.cf_pos;
+				if a.a_write <> None then display_error ctx.com "Multiple resolve-write methods are not supported" cf.cf_pos;
 				check_fun t1 t2;
 				a.a_write <- Some cf;
 			| _ ->
