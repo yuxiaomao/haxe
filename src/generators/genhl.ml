@@ -93,13 +93,12 @@ type context = {
 	cints : (int32, int32) lookup;
 	cnatives : (string * int, (string index * string index * ttype * functable index)) lookup;
 	cfids : (string * path, unit) lookup;
-	cfunctions : fundecl DynArray.t;
+	cfunctions : (fundecl * bool) DynArray.t;
 	cconstants : (constval, (global * int array)) lookup;
 	optimize : bool;
 	w_null_compare : bool;
 	overrides : (string * path, bool) Hashtbl.t;
 	defined_funs : (int,unit) Hashtbl.t;
-	mutable dump_out : (unit IO.output) option;
 	mutable cached_types : (string list, ttype) PMap.t;
 	mutable m : method_context;
 	mutable anons_cache : (tanon, ttype) PMap.t;
@@ -3263,7 +3262,7 @@ and gen_method_wrapper ctx rt t p =
 			assigns = Array.of_list (List.rev ctx.m.massign);
 		} in
 		ctx.m <- old;
-		DynArray.add ctx.cfunctions f;
+		DynArray.add ctx.cfunctions (f, false);
 		fid
 
 and make_fun ?gen_content ctx name fidx f cthis cparent =
@@ -3430,15 +3429,7 @@ and make_fun ?gen_content ctx name fidx f cthis cparent =
 	} in
 	ctx.m <- old;
 	Hashtbl.add ctx.defined_funs fidx ();
-	let f = if ctx.optimize && (gen_content = None || name <> ("","")) then begin
-		let t = Timer.timer ["generate";"hl";"opt"] in
-		let f = Hlopt.optimize ctx.dump_out (DynArray.get ctx.cstrings.arr) hlf f in
-		t();
-		f
-	end else
-		hlf
-	in
-	DynArray.add ctx.cfunctions f;
+	DynArray.add ctx.cfunctions (hlf, (gen_content = None || name <> ("",""))) ;
 	capt
 
 let generate_static ctx c f =
@@ -4105,7 +4096,7 @@ let write_code ch code debug =
 
 (* --------------------------------------------------------------------------------------------------------------------- *)
 
-let create_context com dump =
+let create_context com =
 	let get_type name =
 		try
 			List.find (fun t -> (t_infos t).mt_path = (["hl"],name)) com.types
@@ -4128,7 +4119,6 @@ let create_context com dump =
 		com = com;
 		optimize = not (Gctx.raw_defined com "hl_no_opt");
 		w_null_compare = Gctx.raw_defined com "hl_w_null_compare";
-		dump_out = if dump then Some (IO.output_channel (open_out_bin "dump/hlopt.txt")) else None;
 		m = method_context 0 HVoid null_capture false;
 		cints = new_lookup();
 		cstrings = new_lookup();
@@ -4224,7 +4214,7 @@ let build_code ctx types main =
 		floats = DynArray.to_array ctx.cfloats.arr;
 		globals = DynArray.to_array ctx.cglobals.arr;
 		natives = DynArray.to_array ctx.cnatives.arr;
-		functions = DynArray.to_array ctx.cfunctions;
+		functions = DynArray.to_array (DynArray.map fst ctx.cfunctions);
 		debugfiles = DynArray.to_array ctx.cdebug_files.arr;
 		constants = DynArray.to_array ctx.cconstants.arr;
 	}
@@ -4258,12 +4248,34 @@ let generate com =
 		close_out ch;
 	end else
 
-	let ctx = create_context com dump in
+	let ctx = create_context com in
 	add_types ctx com.types;
+
 	let code = build_code ctx com.types com.main.main_expr in
 	Array.sort (fun (lib1,_,_,_) (lib2,_,_,_) -> lib1 - lib2) code.natives;
+
+	if ctx.optimize then begin
+		let t = Timer.timer ["generate";"hl";"opt"] in
+		let dump_out = if dump then Some (IO.output_channel (open_out_bin "dump/hlopt.txt")) else None in
+		(* parallel *)
+		let num_domains = try int_of_string (Gctx.defined_value com Define.Domains) with Not_found -> 4 in
+		let pool = Domainslib.Task.setup_pool ~num_domains:(num_domains - 1) () in
+		Domainslib.Task.run pool (fun _ ->
+			Domainslib.Task.parallel_for pool ~chunk_size:16 ~start:0 ~finish:(DynArray.length ctx.cfunctions - 1) ~body:(fun idx ->
+				let f, b = DynArray.get ctx.cfunctions idx in
+				if b then begin
+					let f, dumpstr = Hlopt.optimize dump (Array.get code.strings) f "todosign" in
+					(match dump_out with None -> () | Some ch -> IO.nwrite_string ch dumpstr);
+					code.functions.(idx) <- f;
+				end;
+			)
+		);
+		Domainslib.Task.teardown_pool pool;
+		(match dump_out with None -> () | Some ch -> IO.close_out ch);
+		t();
+	end;
+
 	if dump then begin
-		(match ctx.dump_out with None -> () | Some ch -> IO.close_out ch);
 		let ch = open_out_bin "dump/hlcode.txt" in
 		Hlcode.dump (fun s -> output_string ch (s ^ "\n")) code;
 		close_out ch;
