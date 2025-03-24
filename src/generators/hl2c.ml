@@ -328,7 +328,6 @@ let close_file ctx =
 	let fpath = ctx.dir ^ "/" ^ ctx.curfile in
 	let fcontent = (try Std.input_file ~bin:true fpath with _ -> "") in
 	if fcontent <> str then begin
-		Path.mkdir_recursive "" (ExtString.String.nsplit (Filename.dirname fpath) "/");
 		let ch = open_out_bin fpath in
 		output_string ch str;
 		close_out ch;
@@ -1514,6 +1513,8 @@ let write_c com file (code:code) gnames pool =
 	let modules = make_modules gctx all_types in
 	let native_libs = Hashtbl.create 0 in
 
+	Path.mkdir_recursive "" (ExtString.String.nsplit (gctx.dir ^ "/hl") "/");
+
 	(
 	let ctx = open_file gctx "hl/natives.h" in
 	let line = linec ctx and sexpr fmt = Printf.ksprintf (exprc ctx) fmt in
@@ -1836,8 +1837,15 @@ let write_c com file (code:code) gnames pool =
 	);
 
 	(
-	(* parallel *)
 	let modules = Array.of_list modules in
+	(* sequential *)
+	Path.mkdir_recursive "" (ExtString.String.nsplit (gctx.dir) "/");
+	Array.iter (fun m ->
+		Path.mkdir_recursive gctx.dir (ExtString.String.nsplit (Filename.dirname m.m_name) "/");
+		(* add cfiles in deterministic order *)
+		if m.m_functions <> [] then save_cfile gctx (m.m_name ^ ".c")
+	) modules;
+	(* parallel *)
 	Domainslib.Task.run pool (fun _ -> Domainslib.Task.parallel_for pool ~chunk_size:16 ~start:0 ~finish:(Array.length modules - 1) ~body:(fun idx ->
 		let m = modules.(idx) in
 		let defined_types = ref PMap.empty in
@@ -1866,8 +1874,6 @@ let write_c com file (code:code) gnames pool =
 			close_file ctx;
 		end;
 	));
-	(* restore cfiles in deterministic order *)
-	Array.iter (fun m -> if m.m_functions <> [] then save_cfile gctx (m.m_name ^ ".c")) modules;
 	);
 
 	(
