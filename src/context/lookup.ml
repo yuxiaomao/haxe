@@ -13,11 +13,7 @@ class ['key,'value] pmap_lookup = object(self)
 	inherit ['key,'value] lookup
 	val mutable lut : ('key,'value) PMap.t = PMap.empty
 
-	val mutable group_id : int ref = ref 0
-	val mutable groups : (int,'key list) PMap.t = PMap.empty
-
 	method add (key : 'key) (value : 'value) =
-		groups <- PMap.map (fun modules -> key :: modules) groups;
 		lut <- PMap.add key value lut
 
 	method remove (key : 'key) =
@@ -43,11 +39,7 @@ class ['key,'value] hashtbl_lookup = object(self)
 	inherit ['key,'value] lookup
 	val lut : ('key,'value) Hashtbl.t = Hashtbl.create 0
 
-	val mutable group_id : int ref = ref 0
-	val mutable groups : (int,'key list) Hashtbl.t = Hashtbl.create 0
-
 	method add (key : 'key) (value : 'value) =
-		Hashtbl.iter (fun i modules -> Hashtbl.replace groups i (key :: modules)) groups;
 		Hashtbl.replace lut key value
 
 	method remove (key : 'key) =
