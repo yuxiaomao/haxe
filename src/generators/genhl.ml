@@ -32,6 +32,7 @@ open Hlcode
 type ('a,'b) lookup = {
 	arr : 'b DynArray.t;
 	mutable map : ('a, int) PMap.t;
+	lmutex : Mutex.t;
 }
 
 (* not mutable, might be be shared *)
@@ -96,17 +97,24 @@ type context = {
 	cints : (int32, int32) lookup;
 	cnatives : (string * int, (string index * string index * ttype * functable index)) lookup;
 	cfids : (string * path, unit) lookup;
+	cfids_mutex : Mutex.t;
 	cfunctions : (fundecl * bool) DynArray.t;
+	cfunctions_mutex : Mutex.t;
 	cconstants : (constval, (global * int array)) lookup;
 	optimize : bool;
 	w_null_compare : bool;
 	overrides : (string * path, bool) Hashtbl.t;
+	overrides_mutex : Mutex.t;
 	defined_funs : (int,unit) Hashtbl.t;
+	defined_funs_mutex : Mutex.t;
 	mutable cached_types : (string list, ttype) PMap.t;
+	type_mutex : Mutex.t;
 	mutable anons_cache : (tanon, ttype) PMap.t;
 	mutable method_wrappers : ((ttype * ttype), int) PMap.t;
+	method_wrappers_mutex : Mutex.t;
 	mutable rec_cache : (Type.t * ttype option ref) list;
 	mutable cached_tuples : (ttype list, ttype) PMap.t;
+	cached_tuples_mutex : Mutex.t;
 	mutable tstring : ttype;
 	macro_typedefs : (string, ttype) Hashtbl.t;
 	array_impl : array_impl;
@@ -186,6 +194,7 @@ let to_utf8 str p =
 	u8, !ccount
 
 let tuple_type ctx tl =
+	Mutex.protect ctx.cached_tuples_mutex (fun () ->
 	try
 		PMap.find tl ctx.cached_tuples
 	with Not_found ->
@@ -197,6 +206,7 @@ let tuple_type ctx tl =
 		} in
 		ctx.cached_tuples <- PMap.add tl ct ctx.cached_tuples;
 		ct
+	)
 
 let type_size_bits = function
 	| HUI8 | HBool -> 0
@@ -209,6 +219,7 @@ let new_lookup() =
 	{
 		arr = DynArray.create();
 		map = PMap.empty;
+		lmutex = Mutex.create();
 	}
 
 let null_capture =
@@ -220,6 +231,7 @@ let null_capture =
 	}
 
 let lookup l v fb =
+	Mutex.protect l.lmutex (fun () ->
 	try
 		PMap.find v l.map
 	with Not_found ->
@@ -228,11 +240,14 @@ let lookup l v fb =
 		l.map <- PMap.add v id l.map;
 		DynArray.set l.arr id (fb());
 		id
+	)
 
 let lookup_alloc l v =
+	Mutex.protect l.lmutex (fun () ->
 	let id = DynArray.length l.arr in
 	DynArray.add l.arr v;
 	id
+	)
 
 let create_method_context optimize comdebug id t captured hasthis =
 	{
@@ -264,10 +279,10 @@ let efield_name e f =
 	s_type_path e.e_path ^ ":" ^ f.ef_name
 
 let global_type ctx g =
-	DynArray.get ctx.cglobals.arr g
+	Mutex.protect ctx.cglobals.lmutex (fun () -> DynArray.get ctx.cglobals.arr g)
 
 let is_overridden ctx c f =
-	Hashtbl.mem ctx.overrides (f.cf_name,c.cl_path)
+	Mutex.protect ctx.overrides_mutex (fun () -> Hashtbl.mem ctx.overrides (f.cf_name,c.cl_path))
 
 let alloc_float ctx f =
 	lookup ctx.cfloats f (fun() -> f)
@@ -384,34 +399,34 @@ let get_rec_cache ctx t none_callback not_found_callback =
 		ctx.rec_cache <- List.tl ctx.rec_cache;
 		t
 
-let rec to_type ?tref ctx t =
+let rec to_type_unsafe ?tref ctx t =
 	match t with
 	| TMono r ->
 		(match r.tm_type with
 		| None -> HDyn
-		| Some t -> to_type ?tref ctx t)
+		| Some t -> to_type_unsafe ?tref ctx t)
 	| TType (td,tl) ->
 		let t =
 			get_rec_cache ctx t
 				(fun() -> HDyn)
-				(fun tref -> to_type ~tref ctx (apply_typedef td tl))
+				(fun tref -> to_type_unsafe ~tref ctx (apply_typedef td tl))
 		in
 		(match td.t_path with
 		| ["haxe";"macro"], name -> Hashtbl.replace ctx.macro_typedefs name t; t
 		| _ -> t)
 	| TLazy f ->
-		to_type ?tref ctx (lazy_type f)
+		to_type_unsafe ?tref ctx (lazy_type f)
 	| TFun (args, ret) ->
 		HFun (List.map (fun (_,o,t) ->
-			let pt = to_type ctx t in
+			let pt = to_type_unsafe ctx t in
 			if o && not (is_nullable pt) then HRef pt else pt
-		) args, to_type ctx ret)
+		) args, to_type_unsafe ctx ret)
 	| TAnon a when (match !(a.a_status) with ClassStatics _ | EnumStatics _ -> true | _ -> false) ->
 		(match !(a.a_status) with
 		| ClassStatics c ->
-			class_type ctx c (extract_param_types c.cl_params) true
+			class_type_unsafe ctx c (extract_param_types c.cl_params) true
 		| EnumStatics e ->
-			enum_class ctx e
+			enum_class_unsafe ctx e
 		| _ -> die "" __LOC__)
 	| TAnon a ->
 		if PMap.is_empty a.a_fields then HDyn else
@@ -429,7 +444,7 @@ let rec to_type ?tref ctx t =
 			| None -> ()
 			| Some r -> r := Some t);
 			ctx.anons_cache <- PMap.add a t ctx.anons_cache;
-			let fields = PMap.fold (fun cf acc -> cfield_type ctx cf :: acc) a.a_fields [] in
+			let fields = PMap.fold (fun cf acc -> cfield_type_unsafe ctx cf :: acc) a.a_fields [] in
 			let fields = List.sort (fun (n1,_,_) (n2,_,_) -> compare n1 n2) fields in
 			vp.vfields <- Array.of_list fields;
 			Array.iteri (fun i (n,_,_) -> vp.vindex <- PMap.add n i vp.vindex) vp.vfields;
@@ -438,7 +453,7 @@ let rec to_type ?tref ctx t =
 	| TDynamic _ ->
 		HDyn
 	| TEnum (e,_) ->
-		enum_type ~tref ctx e
+		enum_type_unsafe ~tref ctx e
 	| TInst ({ cl_path = ["hl"],"Abstract" },[TInst({ cl_kind = KExpr (EConst (String(name,_)),_) },_)]) ->
 		HAbstract (name, alloc_string ctx name)
 	| TInst (c,pl) ->
@@ -448,13 +463,13 @@ let rec to_type ?tref ctx t =
 				| [] -> HDyn
 				| t :: tl ->
 					match follow (apply_params c.cl_params pl t) with
-					| TInst (c,_) as t when not (has_class_flag c CInterface) -> to_type ?tref ctx t
+					| TInst (c,_) as t when not (has_class_flag c CInterface) -> to_type_unsafe ?tref ctx t
 					| _ -> loop tl
 			in
 			loop (get_constraints ttp)
-		| _ -> class_type ~tref ctx c pl false)
+		| _ -> class_type_unsafe ~tref ctx c pl false)
 	| TAbstract ({a_path = [],"Null"},[t1]) ->
-		let t = to_type ?tref ctx t1 in
+		let t = to_type_unsafe ?tref ctx t1 in
 		if not (is_nullable t) && t <> HVoid then HNull t else t
 	| TAbstract (a,pl) ->
 		if Meta.has Meta.CoreType a.a_meta then
@@ -466,32 +481,32 @@ let rec to_type ?tref ctx t =
 			| [], "Bool" -> HBool
 			| [], "Dynamic" -> HDyn
 			| [], "Class" ->
-				class_type ctx ctx.base_class [] false
+				class_type_unsafe ctx ctx.base_class [] false
 			| [], "Enum" ->
-				class_type ctx ctx.base_type [] false
+				class_type_unsafe ctx ctx.base_type [] false
 			| [], "EnumValue" -> HDyn
-			| ["hl"], "Ref" -> HRef (to_type ctx (List.hd pl))
+			| ["hl"], "Ref" -> HRef (to_type_unsafe ctx (List.hd pl))
 			| ["hl"], ("Bytes" | "BytesAccess") -> HBytes
 			| ["hl"], "Type" -> HType
 			| ["hl"], "UI16" -> HUI16
 			| ["hl"], "UI8" -> HUI8
 			| ["hl"], "I64" -> HI64
 			| ["hl"], "GUID" -> HGUID
-			| ["hl"], "NativeArray" -> HArray (to_type ctx (List.hd pl))
+			| ["hl"], "NativeArray" -> HArray (to_type_unsafe ctx (List.hd pl))
 			| ["haxe";"macro"], "Position" -> HAbstract ("macro_pos", alloc_string ctx "macro_pos")
 			| _ -> failwith ("Unknown core type " ^ s_type_path a.a_path))
 		else
 			get_rec_cache ctx t
 				(fun() -> HDyn)
-				(fun tref -> to_type ~tref ctx (Abstract.get_underlying_type a pl))
+				(fun tref -> to_type_unsafe ~tref ctx (Abstract.get_underlying_type a pl))
 
-and resolve_class ctx c pl statics =
+and resolve_class_unsafe ctx c pl statics =
 	let not_supported() =
 		failwith ("Extern type not supported : " ^ s_type (print_context()) (TInst (c,pl)))
 	in
 	match c.cl_path, pl with
 	| ([],"Array"), [t] ->
-		if statics then ctx.array_impl.abase else array_class ctx (to_type ctx t)
+		if statics then ctx.array_impl.abase else array_class ctx (to_type_unsafe ctx t)
 	| ([],"Array"), [] ->
 		die "" __LOC__
 	| _, _ when (has_class_flag c CExtern) ->
@@ -499,18 +514,18 @@ and resolve_class ctx c pl statics =
 	| _ ->
 		c
 
-and cfield_type ctx cf =
-	let t = to_type ctx cf.cf_type in
+and cfield_type_unsafe ctx cf =
+	let t = to_type_unsafe ctx cf.cf_type in
 	let t = (match cf.cf_kind, t with
 		| Method (MethNormal|MethInline), HFun (args,ret) -> HMethod (args,ret)
 		| _ -> t
 	) in
 	(cf.cf_name,alloc_string ctx cf.cf_name,t)
 
-and field_type ctx f p =
+and field_type_unsafe ctx f p =
 	match f with
 	| FInstance (c,pl,f) | FClosure (Some (c,pl),f) ->
-		let creal = resolve_class ctx c pl false in
+		let creal = resolve_class_unsafe ctx c pl false in
 		let rec loop c =
 			try
 				PMap.find f.cf_name c.cl_fields
@@ -524,11 +539,11 @@ and field_type ctx f p =
 	| FDynamic _ -> t_dynamic
 	| FEnum (_,f) -> f.ef_type
 
-and real_type ctx e =
+and real_type_unsafe ctx e =
 	let rec loop e =
 		match e.eexpr with
 		| TField (_,f) ->
-			let ft = field_type ctx f e.epos in
+			let ft = field_type_unsafe ctx f e.epos in
 			(match ft, e.etype with
 			| TFun (args,ret), TFun (args2,_) ->
 				TFun (List.map2 (fun ((name,opt,t) as a) ((_,_,t2) as a2) ->
@@ -543,7 +558,7 @@ and real_type ctx e =
 						If we have a number, it is more accurate to cast it to the type parameter before wrapping it as dynamic
 						Ignore dynamic method (#7166)
 					*)
-					| TInst ({cl_kind=KTypeParameter _},_), t when is_number (to_type ctx t) && (match f with FInstance (_,_,{ cf_kind = Var _ | Method MethDynamic }) -> false | _ -> true) ->
+					| TInst ({cl_kind=KTypeParameter _},_), t when is_number (to_type_unsafe ctx t) && (match f with FInstance (_,_,{ cf_kind = Var _ | Method MethDynamic }) -> false | _ -> true) ->
 						(name, opt, TAbstract (fake_tnull,[t]))
 					| _ ->
 						a
@@ -561,10 +576,10 @@ and real_type ctx e =
 			loop arr.etype
 		| _ -> e.etype
 	in
-	to_type ctx (loop e)
+	to_type_unsafe ctx (loop e)
 
-and class_type ?(tref=None) ctx c pl statics =
-	let c = if (has_class_flag c CExtern) then resolve_class ctx c pl statics else c in
+and class_type_unsafe ?(tref=None) ctx c pl statics =
+	let c = if (has_class_flag c CExtern) then resolve_class_unsafe ctx c pl statics else c in
 	let key_path = (if statics then "$" ^ snd c.cl_path else snd c.cl_path) :: fst c.cl_path in
 	try
 		PMap.find key_path ctx.cached_types
@@ -582,7 +597,7 @@ and class_type ?(tref=None) ctx c pl statics =
 				| [] -> fields
 			in
 			let pfields = List.fold_left (fun acc (i,_) -> loop i @ acc) [] c.cl_implements in
-			let fields = PMap.fold (fun cf acc -> cfield_type ctx cf :: acc) c.cl_fields [] in
+			let fields = PMap.fold (fun cf acc -> cfield_type_unsafe ctx cf :: acc) c.cl_fields [] in
 			concat_uniq fields pfields
 		in
 		let fields = loop c in
@@ -618,8 +633,8 @@ and class_type ?(tref=None) ctx c pl statics =
 			p.pnfields <- 1;
 		end;
 		let tsup = (match c.cl_super with
-			| Some (csup,pl) when not statics -> Some (class_type ctx csup [] statics)
-			| _ -> if statics then Some (class_type ctx ctx.base_class [] false) else None
+			| Some (csup,pl) when not statics -> Some (class_type_unsafe ctx csup [] statics)
+			| _ -> if statics then Some (class_type_unsafe ctx ctx.base_class [] false) else None
 		) in
 		let start_field, virtuals = (match tsup with
 			| None -> 0, [||]
@@ -667,7 +682,7 @@ and class_type ?(tref=None) ctx c pl statics =
 				Some (try fst (get_index f.cf_name p) with Not_found -> die "" __LOC__)
 			| _ ->
 				let fid = add_field f.cf_name (fun() ->
-					let t = to_type ctx f.cf_type in
+					let t = to_type_unsafe ctx f.cf_type in
 					if has_meta (Meta.Custom ":packed") f.cf_meta then begin
 						(match t with HStruct _ -> () | _ -> abort "Packed field should be struct" f.cf_pos);
 						HPacked t
@@ -684,7 +699,7 @@ and class_type ?(tref=None) ctx c pl statics =
 			List.iter (fun (i,pl) ->
 				let rid = ref (-1) in
 				rid := add_field "" (fun() ->
-					let t = to_type ctx (TInst (i,pl)) in
+					let t = to_type_unsafe ctx (TInst (i,pl)) in
 					p.pinterfaces <- PMap.add t !rid p.pinterfaces;
 					t
 				);
@@ -712,10 +727,10 @@ and class_type ?(tref=None) ctx c pl statics =
 			ctx.ct_delayed <- [];
 			List.iter (fun f -> f()) todo;
 		end;
-		if not statics && c != ctx.core_type && c != ctx.core_enum then p.pclassglobal <- Some (fst (class_global ctx (if statics then ctx.base_class else c)));
+		if not statics && c != ctx.core_type && c != ctx.core_enum then p.pclassglobal <- Some (fst (class_global_unsafe ctx (if statics then ctx.base_class else c)));
 		t
 
-and enum_type ?(tref=None) ctx e =
+and enum_type_unsafe ?(tref=None) ctx e =
 	let key_path = snd e.e_path :: fst e.e_path in
 	try
 		PMap.find key_path ctx.cached_types
@@ -735,16 +750,16 @@ and enum_type ?(tref=None) ctx e =
 		et.efields <- Array.of_list (List.map (fun f ->
 			let f = PMap.find f e.e_constrs in
 			let args = (match f.ef_type with
-				| TFun (args,_) -> Array.of_list (List.map (fun (_,_,t) -> to_type ctx t) args)
+				| TFun (args,_) -> Array.of_list (List.map (fun (_,_,t) -> to_type_unsafe ctx t) args)
 				| _ -> [||]
 			) in
 			(f.ef_name, alloc_string ctx f.ef_name, args)
 		) e.e_names);
-		let ct = enum_class ctx e in
+		let ct = enum_class_unsafe ctx e in
 		et.eglobal <- Some (alloc_global ctx (match ct with HObj o -> o.pname | _ -> die "" __LOC__) ct);
 		t
 
-and enum_class ctx e =
+and enum_class_unsafe ctx e =
 	let key_path = ("$" ^ snd e.e_path) :: fst e.e_path in
 	try
 		PMap.find key_path ctx.cached_types
@@ -766,7 +781,7 @@ and enum_class ctx e =
 		} in
 		let t = HObj p in
 		ctx.cached_types <- PMap.add key_path t ctx.cached_types;
-		p.psuper <- Some (match class_type ctx ctx.base_enum [] false with HObj o -> o | _ -> die "" __LOC__);
+		p.psuper <- Some (match class_type_unsafe ctx ctx.base_enum [] false with HObj o -> o | _ -> die "" __LOC__);
 		t
 
 and alloc_fun_path ctx path name =
@@ -786,12 +801,37 @@ and alloc_function_name ctx f =
 and alloc_global ctx name t =
 	lookup ctx.cglobals name (fun() -> t)
 
-and class_global ?(resolve=true) ctx c =
+and class_global_unsafe ?(resolve=true) ctx c =
 	let static = c != ctx.base_class in
 	let c = if resolve && is_array_type (HObj { null_proto with pname = s_type_path c.cl_path }) then ctx.array_impl.abase else c in
-	let c = resolve_class ctx c (extract_param_types c.cl_params) static in
-	let t = class_type ctx c [] static in
+	let c = resolve_class_unsafe ctx c (extract_param_types c.cl_params) static in
+	let t = class_type_unsafe ctx c [] static in
 	alloc_global ctx ("$" ^ s_type_path c.cl_path) t, t
+
+
+let to_type ?tref ctx t =
+	Mutex.protect ctx.type_mutex (fun () -> to_type_unsafe ?tref ctx t)
+
+let resolve_class ctx c pl statics =
+	Mutex.protect ctx.type_mutex (fun () -> resolve_class_unsafe ctx c pl statics)
+
+let field_type ctx f p =
+	Mutex.protect ctx.type_mutex (fun () -> field_type_unsafe ctx f p)
+
+let real_type ctx e =
+	Mutex.protect ctx.type_mutex (fun () -> real_type_unsafe ctx e)
+
+let class_type ?(tref=None) ctx c pl statics =
+	Mutex.protect ctx.type_mutex (fun () -> class_type_unsafe ~tref ctx c pl statics)
+
+let enum_type ?(tref=None) ctx e =
+	Mutex.protect ctx.type_mutex (fun () -> enum_type_unsafe ~tref ctx e)
+
+let enum_class ctx e =
+	Mutex.protect ctx.type_mutex (fun () -> enum_class_unsafe ctx e)
+
+let class_global ?(resolve=true) ctx c =
+	Mutex.protect ctx.type_mutex (fun () -> class_global_unsafe ~resolve ctx c)
 
 let resolve_class_global ctx cpath =
 	lookup ctx.cglobals ("$" ^ cpath) (fun() -> die "" __LOC__)
@@ -804,10 +844,10 @@ let alloc_std ctx name args ret =
 	(* different from :hlNative to prevent mismatch *)
 	let nid = lookup ctx.cnatives ("$" ^ name ^ "@" ^ lib, -1) (fun() ->
 		let fid = alloc_fun_path ctx ([],"std") name in
-		Hashtbl.add ctx.defined_funs fid ();
+		Mutex.protect ctx.defined_funs_mutex (fun () -> Hashtbl.add ctx.defined_funs fid ());
 		(alloc_string ctx lib, alloc_string ctx name,HFun (args,ret),fid)
 	) in
-	let _,_,_,fid = DynArray.get ctx.cnatives.arr nid in
+	let _,_,_,fid = Mutex.protect ctx.cnatives.lmutex (fun () -> DynArray.get ctx.cnatives.arr nid) in
 	fid
 
 let alloc_fresh ctx t =
@@ -883,7 +923,7 @@ let alloc_var gctx ctx v new_var =
 	try
 		Hashtbl.find ctx.mvars v.v_id
 	with Not_found ->
-		let r = alloc_tmp ctx (to_type gctx v.v_type) in (*todo mutex*)
+		let r = alloc_tmp ctx (to_type gctx v.v_type) in
 		hold ctx r;
 		Hashtbl.add ctx.mvars v.v_id r;
 		r
@@ -2344,9 +2384,11 @@ and eval_expr (gctx:context) (ctx:method_context) e =
 			let robj = eval_null_check gctx ctx ethis in
 			op ctx (ODynGet (r,robj,f))
 		| AEnum (en,index) ->
-			let cur_fid = DynArray.length gctx.cfids.arr in
+			Mutex.lock gctx.cfids_mutex;
+			let cur_fid = Mutex.protect gctx.cfids.lmutex (fun () -> DynArray.length gctx.cfids.arr) in
 			let name = List.nth en.e_names index in
 			let fid = alloc_fun_path gctx en.e_path name in
+			Mutex.unlock gctx.cfids_mutex;
 			if fid = cur_fid then begin
 				let ef = PMap.find name en.e_constrs in
 				let eargs, et = (match follow ef.ef_type with TFun (args,ret) -> args, ret | _ -> die "" __LOC__) in
@@ -2727,7 +2769,7 @@ and eval_expr (gctx:context) (ctx:method_context) e =
 			(match acc with AArray (a,_,idx) -> free ctx a; free ctx idx | _ -> ());
 			!ret)
 	| TFunction f ->
-		let fid = alloc_function_name gctx ("function#" ^ string_of_int (DynArray.length gctx.cfids.arr)) in
+		let fid = Mutex.protect gctx.cfids_mutex (fun () -> alloc_function_name gctx ("function#" ^ string_of_int (DynArray.length gctx.cfids.arr))) in
 		let capt = make_fun gctx ("","") fid f None (Some ctx.mcaptured) in
 		let r = alloc_tmp ctx (to_type gctx e.etype) in
 		if capt == ctx.mcaptured then
@@ -3237,10 +3279,14 @@ and build_capture_vars ctx f =
 
 and gen_method_wrapper (gctx:context) rt t p =
 	try
-		PMap.find (rt,t) gctx.method_wrappers
+		Mutex.lock gctx.method_wrappers_mutex;
+		let fid = PMap.find (rt,t) gctx.method_wrappers in
+		Mutex.unlock gctx.method_wrappers_mutex;
+		fid
 	with Not_found ->
 		let fid = lookup_alloc gctx.cfids () in
 		gctx.method_wrappers <- PMap.add (rt,t) fid gctx.method_wrappers;
+		Mutex.unlock gctx.method_wrappers_mutex;
 		let targs, tret = (match t with HFun (args, ret) -> args, ret | _ -> die "" __LOC__) in
 		let iargs, iret = (match rt with HFun (args, ret) -> args, ret | _ -> die "" __LOC__) in
 		let ctx = create_method_context gctx.optimize gctx.com.debug fid HDyn null_capture false in
@@ -3264,7 +3310,7 @@ and gen_method_wrapper (gctx:context) rt t p =
 			debug = make_debug gctx ctx.mdebug;
 			assigns = Array.of_list (List.rev ctx.massign);
 		} in
-		DynArray.add gctx.cfunctions (f, false);
+		Mutex.protect gctx.cfunctions_mutex (fun () -> DynArray.add gctx.cfunctions (f, false));
 		fid
 
 and make_fun ?gen_content (gctx:context) name fidx f cthis cparent =
@@ -3428,8 +3474,8 @@ and make_fun ?gen_content (gctx:context) name fidx f cthis cparent =
 		debug = make_debug gctx ctx.mdebug;
 		assigns = Array.of_list (List.sort (fun (_,p1) (_,p2) -> p1 - p2) (List.rev ctx.massign));
 	} in
-	Hashtbl.add gctx.defined_funs fidx ();
-	DynArray.add gctx.cfunctions (hlf, (gen_content = None || name <> ("",""))) ;
+	Mutex.protect gctx.defined_funs_mutex (fun () -> Hashtbl.add gctx.defined_funs fidx ());
+	Mutex.protect gctx.cfunctions_mutex (fun () -> DynArray.add gctx.cfunctions (hlf, (gen_content = None || name <> ("",""))));
 	capt
 
 let generate_static gctx c f =
@@ -3442,7 +3488,7 @@ let generate_static gctx c f =
 		let add_native lib name =
 			let fid = alloc_fid gctx c f in
 			ignore(lookup gctx.cnatives (name ^ "@" ^ lib,fid) (fun() ->
-				Hashtbl.add gctx.defined_funs fid ();
+				Mutex.protect gctx.defined_funs_mutex (fun () -> Hashtbl.add gctx.defined_funs fid ());
 				(alloc_string gctx lib, alloc_string gctx name,to_type gctx f.cf_type,fid)
 			));
 		in
@@ -3458,7 +3504,7 @@ let generate_static gctx c f =
 						op ctx (OThrow (make_string gctx ctx ("Requires compiling with -D hl-ver=" ^ ver ^ ".0 or higher") null_pos));
 					in
 					(match f.cf_expr with
-					| Some { eexpr = TFunction fn } -> ignore(make_fun gctx ~gen_content (s_type_path c.cl_path,f.cf_name) (alloc_fid gctx c f) fn None None)
+					| Some { eexpr = TFunction fn } -> ignore(make_fun gctx ~gen_content (s_type_path c.cl_path,f.cf_name) (Mutex.protect gctx.cfids_mutex (fun () -> alloc_fid gctx c f)) fn None None)
 					| _ -> if not (Meta.has Meta.NoExpr f.cf_meta) then abort "Missing function body" f.cf_pos)
 
 				else
@@ -3469,7 +3515,7 @@ let generate_static gctx c f =
 				abort "Invalid @:hlNative decl" p
 			| [] ->
 				(match f.cf_expr with
-				| Some { eexpr = TFunction fn } -> ignore(make_fun gctx (s_type_path c.cl_path,f.cf_name) (alloc_fid gctx c f) fn None None)
+				| Some { eexpr = TFunction fn } -> ignore(make_fun gctx (s_type_path c.cl_path,f.cf_name) (Mutex.protect gctx.cfids_mutex (fun () -> alloc_fid gctx c f)) fn None None)
 				| _ -> if not (Meta.has Meta.NoExpr f.cf_meta) then abort "Missing function body" f.cf_pos)
 			| _ :: l ->
 				loop l
@@ -3522,7 +3568,7 @@ let generate_member (gctx:context) c f =
 				}
 			| _ -> abort "Missing function body" f.cf_pos
 		in
-		ignore(make_fun ?gen_content gctx (s_type_path c.cl_path,f.cf_name) (alloc_fid gctx c f) ff (Some c) None);
+		ignore(make_fun ?gen_content gctx (s_type_path c.cl_path,f.cf_name) (Mutex.protect gctx.cfids_mutex (fun () -> alloc_fid gctx c f)) ff (Some c) None);
 		if f.cf_name = "toString" && not (has_class_field_flag f CfOverride) && not (PMap.mem "__string" c.cl_fields) && is_to_string f.cf_type then begin
 			let p = f.cf_pos in
 			(* function __string() return this.toString().bytes *)
@@ -3530,7 +3576,7 @@ let generate_member (gctx:context) c f =
 			let tstr = mk (TCall (mk (TField (ethis,FInstance(c,extract_param_types c.cl_params,f))) f.cf_type p,[])) gctx.com.basic.tstring p in
 			let cstr, cf_bytes = (try (match gctx.com.basic.tstring with TInst(c,_) -> c, PMap.find "bytes" c.cl_fields | _ -> die "" __LOC__) with Not_found -> die "" __LOC__) in
 			let estr = mk (TReturn (Some (mk (TField (tstr,FInstance (cstr,[],cf_bytes))) cf_bytes.cf_type p))) gctx.com.basic.tvoid p in
-			ignore(make_fun gctx (s_type_path c.cl_path,"__string") (alloc_fun_path gctx c.cl_path "__string") { tf_expr = estr; tf_args = []; tf_type = cf_bytes.cf_type; } (Some c) None)
+			ignore(make_fun gctx (s_type_path c.cl_path,"__string") (Mutex.protect gctx.cfids_mutex (fun () -> alloc_fun_path gctx c.cl_path "__string")) { tf_expr = estr; tf_args = []; tf_type = cf_bytes.cf_type; } (Some c) None)
 		end
 
 let generate_type gctx t =
@@ -4120,6 +4166,13 @@ let create_context com =
 		optimize = not (Gctx.raw_defined com "hl_no_opt");
 		w_null_compare = Gctx.raw_defined com "hl_w_null_compare";
 		num_domains = (try int_of_string (Gctx.defined_value com Define.Domains) with Not_found -> Domain.recommended_domain_count ());
+		cfids_mutex = Mutex.create();
+		cfunctions_mutex = Mutex.create();
+		overrides_mutex = Mutex.create();
+		defined_funs_mutex = Mutex.create();
+		type_mutex = Mutex.create();
+		method_wrappers_mutex = Mutex.create();
+		cached_tuples_mutex = Mutex.create();
 		cints = new_lookup();
 		cstrings = new_lookup();
 		cbytes = new_lookup();
@@ -4165,7 +4218,8 @@ let create_context com =
 	ctx
 
 let add_types gctx types =
-	List.iter (fun t ->
+	let types = Array.of_list types in
+	Array.iter (fun t ->
 		match t with
 		| TClassDecl ({ cl_path = ["hl";"types"], ("BytesIterator"|"BytesKeyValueIterator"|"ArrayBytes") } as c) ->
 			add_class_flag c CExtern
@@ -4173,7 +4227,7 @@ let add_types gctx types =
 			let rec loop p f =
 				match p with
 				| Some (p,_) when PMap.mem f.cf_name p.cl_fields || loop p.cl_super f ->
-					Hashtbl.replace gctx.overrides (f.cf_name,p.cl_path) true;
+					Mutex.protect gctx.overrides_mutex (fun () -> Hashtbl.replace gctx.overrides (f.cf_name,p.cl_path) true);
 					true
 				| _ ->
 					false
@@ -4200,7 +4254,10 @@ let add_types gctx types =
 			) c.cl_meta;
  		| _ -> ()
 	) types;
-	List.iter (generate_type gctx) types
+	(* Parallel.run_parallel_for gctx.num_domains (Array.length types) (fun idx ->
+		generate_type gctx types.(idx)
+	) *)
+	Array.iter (fun t -> generate_type gctx t) types
 
 let build_code gctx types main =
 	let ep = generate_static_init gctx types main in
@@ -4252,6 +4309,7 @@ let generate com =
 	add_types ctx com.types;
 
 	let code = build_code ctx com.types com.main.main_expr in
+	Array.sort (fun f1 f2 -> f1.findex - f2.findex) code.functions; (*todo not sure it should be here*)
 	Array.sort (fun (lib1,_,_,_) (lib2,_,_,_) -> lib1 - lib2) code.natives;
 
 	if ctx.optimize then begin
