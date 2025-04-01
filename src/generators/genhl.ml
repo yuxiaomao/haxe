@@ -484,16 +484,11 @@ let rec to_type ?tref ctx t =
 				(fun tref -> to_type ~tref ctx (Abstract.get_underlying_type a pl))
 
 and resolve_class ctx c pl statics =
-	let not_supported() =
-		failwith ("Extern type not supported : " ^ s_type (print_context()) (TInst (c,pl)))
-	in
 	match c.cl_path, pl with
 	| ([],"Array"), [t] ->
 		if statics then ctx.array_impl.abase else array_class ctx (to_type ctx t)
 	| ([],"Array"), [] ->
 		die "" __LOC__
-	| _, _ when (has_class_flag c CExtern) ->
-		not_supported()
 	| _ ->
 		c
 
@@ -641,7 +636,7 @@ and class_type ?(tref=None) ctx c pl statics =
 			) :: ctx.ct_delayed;
 			fid
 		in
-		List.iter (fun f ->
+		if not (has_class_flag c CExtern) then List.iter (fun f ->
 			if is_extern_field f || (statics && f.cf_name = "__meta__") then () else
 			let fid = (match f.cf_kind with
 			| Method m when m <> MethDynamic && not statics ->
@@ -2368,7 +2363,7 @@ and eval_expr ctx e =
 		| _ -> unsafe_cast_to ctx r to_t e.epos)
 	| TObjectDecl fl ->
 		(match to_type ctx e.etype with
-		| HVirtual vp as t when Array.length vp.vfields = List.length fl && not (List.exists (fun ((s,_,_),e) -> s = "toString" && is_to_string e.etype) fl)  ->
+		| HVirtual vp as t when Array.length vp.vfields = List.length fl && not (List.exists (fun ((s,_,_),e) -> (try ignore(PMap.find s vp.vindex); false with Not_found -> true) || (s = "toString" && is_to_string e.etype)) fl) ->
 			let r = alloc_tmp ctx t in
 			op ctx (ONew r);
 			hold ctx r;
