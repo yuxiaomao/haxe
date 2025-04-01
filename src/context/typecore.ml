@@ -655,6 +655,28 @@ let safe_mono_close ctx m p =
 let relative_path ctx file =
 	ctx.com.class_paths#relative_path file
 
+let mk_infos_t =
+	let fileName = ("fileName",null_pos,NoQuotes) in
+	let lineNumber = ("lineNumber",null_pos,NoQuotes) in
+	let className = ("className",null_pos,NoQuotes) in
+	let methodName = ("methodName",null_pos,NoQuotes) in
+	(fun ctx p params t ->
+		let file = if ctx.com.is_macro_context then p.pfile else if Common.defined ctx.com Define.AbsolutePath then Path.get_full_path p.pfile else relative_path ctx p.pfile in
+		let line = Lexer.get_error_line p in
+		let class_name = s_type_path ctx.c.curclass.cl_path in
+		let fields =
+			(fileName,Texpr.Builder.make_string ctx.com.basic file p) ::
+			(lineNumber,Texpr.Builder.make_int ctx.com.basic line p) ::
+			(className,Texpr.Builder.make_string ctx.com.basic class_name p) ::
+			if ctx.f.curfield.cf_name = "" then
+				params
+			else
+				(methodName,Texpr.Builder.make_string ctx.com.basic ctx.f.curfield.cf_name p) ::
+				params
+		in
+		mk (TObjectDecl fields) t p
+	)
+
 let mk_infos ctx p params =
 	let file = if ctx.com.is_macro_context then p.pfile else if Common.defined ctx.com Define.AbsolutePath then Path.get_full_path p.pfile else relative_path ctx p.pfile in
 	(EObjectDecl (
