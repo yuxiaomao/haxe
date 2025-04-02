@@ -17,7 +17,6 @@ let create com macros =
 			delayed = Array.init TyperPass.all_typer_passes_length (fun _ -> { tasks = []});
 			delayed_min_index = 0;
 			debug_delayed = [];
-			doinline = com.display.dms_inline && not (Common.defined com Define.NoInline);
 			retain_meta = Common.defined com Define.RetainUntypedMeta;
 			std_types = null_module;
 			global_using = [];

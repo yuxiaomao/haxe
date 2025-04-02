@@ -242,6 +242,7 @@ type context = {
 	mutable debug : bool;
 	mutable verbose : bool;
 	mutable foptimize : bool;
+	mutable doinline : bool;
 	mutable platform : platform;
 	mutable config : PlatformConfig.platform_config;
 	empty_class_path : ClassPath.class_path;
@@ -697,6 +698,7 @@ let create timer_ctx compilation_step cs version args display_mode =
 		display = display_mode;
 		verbose = false;
 		foptimize = true;
+		doinline = true;
 		features = Hashtbl.create 0;
 		platform = Cross;
 		config = default_config;

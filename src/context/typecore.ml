@@ -94,7 +94,6 @@ type typer_globals = {
 	mutable delayed : typer_pass_tasks Array.t;
 	mutable delayed_min_index : int;
 	mutable debug_delayed : (typer_pass * ((unit -> unit) * (string * string list) * typer) list) list;
-	doinline : bool;
 	retain_meta : bool;
 	mutable core_api : typer option;
 	mutable macros : ((unit -> unit) * typer) option;
@@ -508,7 +507,7 @@ let is_forced_inline c cf =
 	| _ -> false
 
 let needs_inline ctx c cf =
-	cf.cf_kind = Method MethInline && ctx.allow_inline && (ctx.g.doinline || is_forced_inline c cf)
+	cf.cf_kind = Method MethInline && ctx.allow_inline && (ctx.com.doinline || is_forced_inline c cf)
 
 (** checks if we can access to a given class field using current context *)
 let can_access ctx c cf stat =
