@@ -17,11 +17,16 @@ type t = {
 	platform_config : platform_config;
 	debug : bool;
 	is_macro_context : bool;
+	foptimize : bool;
+	doinline : bool;
 	exceptions : exn list ref;
 	exceptions_mutex : Mutex.t;
 	warnings : saved_warning list ref;
 	warnings_mutex : Mutex.t;
+	errors : Error.error list ref;
+	errors_mutex : Mutex.t;
 	timer_ctx : Timer.timer_context;
+	find_module : path -> module_def;
 	curclass : tclass;
 	curfield : tclass_field;
 }
@@ -33,11 +38,16 @@ let of_com (com : Common.context) = {
 	platform_config = com.config;
 	debug = com.debug;
 	is_macro_context = com.is_macro_context;
+	foptimize = com.foptimize;
+	doinline = com.doinline;
 	exceptions = ref [];
 	exceptions_mutex = Mutex.create ();
 	warnings = ref [];
 	warnings_mutex = Mutex.create ();
+	errors = ref [];
+	errors_mutex = Mutex.create ();
 	timer_ctx = com.timer_ctx;
+	find_module = com.module_lut#find;
 	curclass = null_class;
 	curfield = null_field;
 }
@@ -49,12 +59,18 @@ let of_typer (ctx : Typecore.typer) = {
 }
 
 let finalize scom com =
+	let warnings = !(scom.warnings) in
+	let errors = !(scom.errors) in
+	let exns = !(scom.exceptions) in
+	scom.warnings := [];
+	scom.errors := [];
+	scom.exceptions := [];
 	List.iter (fun warning ->
 		Common.module_warning com warning.w_module warning.w_warning warning.w_options warning.w_msg warning.w_pos
-	) !(scom.warnings);
-	scom.warnings := [];
-	let exns = !(scom.exceptions) in
-	scom.exceptions := [];
+	) warnings;
+	List.iter (fun err ->
+		Common.display_error_ext com err
+	) errors;
 	match exns with
 	| x :: _ ->
 		raise x
@@ -64,8 +80,14 @@ let finalize scom com =
 let run_with_scom com scom pool f =
 	Std.finally (fun() -> finalize scom com) f ()
 
-let add_exn scom exn =
-	Mutex.protect scom.exceptions_mutex (fun () -> scom.exceptions := exn :: !(scom.exceptions))
+let add_error scom err =
+	Mutex.protect scom.errors_mutex (fun () -> scom.errors := err :: !(scom.errors))
+
+let add_exn scom exn = match exn with
+	| Error.Error err ->
+		add_error scom err
+	| _ ->
+		Mutex.protect scom.exceptions_mutex (fun () -> scom.exceptions := exn :: !(scom.exceptions))
 
 let add_warning scom w msg p =
 	let options = (Warning.from_meta scom.curfield.cf_meta) @ (Warning.from_meta scom.curclass.cl_meta) in
