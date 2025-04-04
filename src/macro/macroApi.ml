@@ -1669,7 +1669,6 @@ let decode_path v =
 	(pack,name)
 
 let decode_platform_config v =
-	let open Common in
 	let capture_policy = match decode_enum (field v "capturePolicy") with
 		| 0, [] -> CPNone
 		| 1, [] -> CPWrapRef

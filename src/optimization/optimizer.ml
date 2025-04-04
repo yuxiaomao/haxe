@@ -20,7 +20,6 @@
 open Ast
 open Type
 open SafeCom
-open Typecore
 open OptimizerTexpr
 open Error
 open Globals

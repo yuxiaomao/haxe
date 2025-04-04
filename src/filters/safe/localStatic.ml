@@ -1,6 +1,5 @@
 open Globals
 open Type
-open Typecore
 open Error
 
 type lscontext = {

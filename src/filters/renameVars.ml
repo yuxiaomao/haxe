@@ -1,6 +1,5 @@
 open Globals
 open Type
-open SafeCom
 open Ast
 open PlatformConfig
 

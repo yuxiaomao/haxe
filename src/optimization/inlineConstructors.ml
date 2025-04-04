@@ -18,7 +18,6 @@
  *)
 
 open Ast
-open Typecore
 open SafeCom
 open Type
 open Error

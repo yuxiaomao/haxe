@@ -1,5 +1,4 @@
 open Globals
-open SafeCom
 open Type
 
 let check_local_vars_init scom e =
