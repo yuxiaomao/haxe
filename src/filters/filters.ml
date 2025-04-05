@@ -226,9 +226,13 @@ let destruction (com : Common.context) scom ectx detail_times main rename_locals
 			| "no" -> DceNo
 			| _ -> failwith ("Unknown DCE mode " ^ dce_mode)
 		in
-		Dce.run com main dce_mode;
+		let std_paths = com.class_paths#get_std_paths in
+		let mscom = Option.map of_com (com.get_macros()) in
+		let types = Dce.run scom mscom main dce_mode std_paths types in
+		com.types <- types
 	);
 	Common.enter_stage com CDceDone;
+	let types = com.types in
 
 	(* This has to run after DCE, or otherwise its condition always holds. *)
 	begin match ectx with

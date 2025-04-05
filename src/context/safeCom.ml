@@ -27,6 +27,7 @@ type t = {
 	errors_mutex : Mutex.t;
 	timer_ctx : Timer.timer_context;
 	find_module : path -> module_def;
+	find_module_by_type : path -> module_def;
 	curclass : tclass;
 	curfield : tclass_field;
 }
@@ -48,6 +49,7 @@ let of_com (com : Common.context) = {
 	errors_mutex = Mutex.create ();
 	timer_ctx = com.timer_ctx;
 	find_module = com.module_lut#find;
+	find_module_by_type = com.module_lut#find_by_type;
 	curclass = null_class;
 	curfield = null_field;
 }

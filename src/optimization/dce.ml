@@ -18,7 +18,7 @@
  *)
 
 open Ast
-open Common
+open SafeCom
 open Type
 open Globals
 
@@ -28,7 +28,8 @@ type dce_mode =
 	| DceFull
 
 type dce = {
-	com : context;
+	scom : SafeCom.t;
+	mscom : SafeCom.t option;
 	full : bool;
 	std_dirs : string list;
 	debug : bool;
@@ -48,9 +49,9 @@ type dce = {
 let push_class dce c =
 	{dce with curclass = c}
 
-let resolve_class_field_ref ctx cfr =
-	let ctx = if cfr.cfr_is_macro && not ctx.is_macro_context then Option.get (ctx.get_macros()) else ctx in
-	let m = ctx.module_lut#find_by_type cfr.cfr_path in
+let resolve_class_field_ref dce cfr =
+	let scom = if cfr.cfr_is_macro && not dce.scom.is_macro_context then Option.get dce.mscom else dce.scom in
+	let m = scom.find_module_by_type cfr.cfr_path in
 
 	Option.get (ExtList.List.find_map (fun mt -> match mt with
 		| TClassDecl c when c.cl_path = cfr.cfr_path ->
@@ -95,11 +96,11 @@ let keep_whole_class dce c =
 	|| not (dce.full || is_std_file dce (Path.UniqueKey.lazy_path c.cl_module.m_extra.m_file) || has_meta Meta.Dce c.cl_meta)
 	|| super_forces_keep c
 	|| (match c with
-		| { cl_path = ([],("Math"|"Array"))} when dce.com.platform = Js -> false
+		| { cl_path = ([],("Math"|"Array"))} when dce.scom.platform = Js -> false
 		| { cl_path = ["flash";"_Boot"],"RealBoot" } -> true
 		| _ when (has_class_flag c CExtern) -> true
 		| { cl_path = [],"String" }
-		| { cl_path = [],"Array" } -> not (dce.com.platform = Js)
+		| { cl_path = [],"Array" } -> not (dce.scom.platform = Js)
 		| _ -> false)
 
 let keep_whole_enum dce en =
@@ -154,7 +155,7 @@ let rec check_feature dce s =
 			Hashtbl.add dce.checked_features s ();
 			Mutex.unlock dce.feature_mutex;
 			List.iter (fun cfr ->
-				let (c, cf) = resolve_class_field_ref dce.com cfr in
+				let (c, cf) = resolve_class_field_ref dce cfr in
 				mark_field dce c cf cfr.cfr_kind
 			) !l
 		end else
@@ -286,7 +287,7 @@ and mark_t dce p t =
 				List.iter (loop stack) pl
 			| TAbstract(a,pl) when Meta.has Meta.MultiType a.a_meta ->
 				begin try
-					loop stack (snd (AbstractCast.find_multitype_specialization dce.com.platform a pl p))
+					loop stack (snd (AbstractCast.find_multitype_specialization dce.scom.platform a pl p))
 				with Error.Error _ ->
 					()
 				end
@@ -431,7 +432,7 @@ and mark_directly_used_t dce p t =
 		List.iter (mark_directly_used_t dce p) pl
 	| TAbstract(a,pl) when Meta.has Meta.MultiType a.a_meta ->
 		begin try (* this is copy-pasted from mark_t *)
-			mark_directly_used_t dce p (snd (AbstractCast.find_multitype_specialization dce.com.platform a pl p))
+			mark_directly_used_t dce p (snd (AbstractCast.find_multitype_specialization dce.scom.platform a pl p))
 		with Error.Error _ ->
 			()
 		end
@@ -512,7 +513,7 @@ and expr_field dce e fa is_call_expr =
 			end
 	in
 	let mark_instance_field_access c cf =
-		if (not is_call_expr && dce.com.platform = Python) then begin
+		if (not is_call_expr && dce.scom.platform = Python) then begin
 			if c.cl_path = ([], "Array") then begin
 				check_and_add_feature dce "closure_Array";
 				check_and_add_feature dce ("python.internal.ArrayImpl." ^ cf.cf_name);
@@ -724,7 +725,7 @@ and expr dce e =
 	| _ ->
 		Type.iter (expr dce) e
 
-let fix_accessors com =
+let fix_accessors types =
 	List.iter (fun mt -> match mt with
 		(* filter empty abstract implementation classes (issue #1885). *)
 		| TClassDecl({cl_kind = KAbstractImpl _} as c) when c.cl_ordered_statics = [] && c.cl_ordered_fields = [] && not (has_class_flag c CUsed) ->
@@ -756,7 +757,7 @@ let fix_accessors com =
 			List.iter (check_prop true) c.cl_ordered_statics;
 			List.iter (check_prop false) c.cl_ordered_fields;
 		| _ -> ()
-	) com.types
+	) types
 
 let extract_if_feature meta =
 	let rec loop = function
@@ -772,7 +773,7 @@ let extract_if_feature meta =
 	in
 	loop meta
 
-let collect_entry_points dce com =
+let collect_entry_points dce types =
 	let delayed = ref [] in
 	let check_feature cf_ref meta =
 		List.iter (fun s ->
@@ -789,9 +790,9 @@ let collect_entry_points dce com =
 			remove_class_flag c CUsed;
 			let cl_if_feature = extract_if_feature c.cl_meta in
 			let keep_class = keep_whole_class dce c && (not (has_class_flag c CExtern) || (has_class_flag c CInterface)) in
-			let is_struct = dce.com.platform = Hl && Meta.has Meta.Struct c.cl_meta in
+			let is_struct = dce.scom.platform = Hl && Meta.has Meta.Struct c.cl_meta in
 			let loop kind cf =
-				let cf_ref = mk_class_field_ref c cf kind com.is_macro_context in
+				let cf_ref = mk_class_field_ref c cf kind dce.scom.is_macro_context in
 				let cf_if_feature = extract_if_feature cf.cf_meta in
 				check_feature cf_ref (cl_if_feature @ cf_if_feature);
 				(* Have to delay mark_field so that we see all @:ifFeature *)
@@ -817,7 +818,7 @@ let collect_entry_points dce com =
 			) :: !delayed;
 		| _ ->
 			()
-	) com.types;
+	) types;
 	List.iter (fun f -> f()) !delayed;
 	if dce.debug then begin
 		DynArray.iter (fun (c,cf,_) -> match cf.cf_expr with
@@ -849,9 +850,9 @@ let mark dce =
 			loop pool
 		end
 	in
-	Parallel.run_in_new_pool dce.com.timer_ctx loop
+	Parallel.run_in_new_pool dce.scom.timer_ctx loop
 
-let sweep dce com =
+let sweep dce types =
 	let rec loop acc types =
 		match types with
 		| (TClassDecl c) as mt :: l when keep_whole_class dce c ->
@@ -926,15 +927,16 @@ let sweep dce com =
 		| [] ->
 			acc
 	in
-	com.types <- loop [] (List.rev com.types)
+	loop [] (List.rev types)
 
-let run com main mode =
+let run scom mscom main mode std_paths types =
 	let full = mode = DceFull in
 	let dce = {
-		com = com;
+		scom = scom;
+		mscom = mscom;
 		full = full;
-		std_dirs = if full then [] else List.map (fun path -> Path.get_full_path path#path) com.class_paths#get_std_paths;
-		debug = Common.defined com Define.DceDebug;
+		std_dirs = if full then [] else List.map (fun path -> Path.get_full_path path#path) std_paths;
+		debug = Define.defined scom.defines Define.DceDebug;
 		added_fields = DynArray.create ();
 		follow_expr = expr;
 		marked_fields = ref [];
@@ -949,18 +951,21 @@ let run com main mode =
 	} in
 
 	(* first step: get all entry points, which is the main method and all class methods which are marked with @:keep *)
-	Timer.time com.timer_ctx ["filters";"dce";"collect"] collect_entry_points dce com;
+	Timer.time scom.timer_ctx ["filters";"dce";"collect"] collect_entry_points dce types;
 
 	(* second step: initiate DCE passes and keep going until no new fields were added *)
-	Timer.time com.timer_ctx ["filters";"dce";"mark"] mark dce;
+	Timer.time scom.timer_ctx ["filters";"dce";"mark"] mark dce;
 
 	(* third step: filter types *)
-	if mode <> DceNo then
-		Timer.time com.timer_ctx ["filters";"dce";"sweep"] sweep dce com;
+	let types = if mode <> DceNo then
+		Timer.time scom.timer_ctx ["filters";"dce";"sweep"] sweep dce types
+	else
+		types
+	in
 
-	Timer.time com.timer_ctx ["filters";"dce";"cleanup"] (fun () ->
+	Timer.time scom.timer_ctx ["filters";"dce";"cleanup"] (fun () ->
 		(* extra step to adjust properties that had accessors removed (required for Php and Cpp) *)
-		fix_accessors com;
+		fix_accessors types;
 
 		(* remove "override" from fields that do not override anything anymore *)
 		List.iter (fun mt -> match mt with
@@ -978,7 +983,7 @@ let run com main mode =
 					end
 				) c.cl_ordered_fields;
 			| _ -> ()
-		) com.types;
+		) types;
 
 		(*
 			Mark extern classes as really used if they are extended by non-extern ones.
@@ -989,8 +994,9 @@ let run com main mode =
 			| TClassDecl c when not (has_class_flag c CExtern) && c.cl_implements <> [] ->
 				List.iter (fun (iface,_) -> if ((has_class_flag iface CExtern)) then mark_directly_used_class dce iface) c.cl_implements;
 			| _ -> ()
-		) com.types;
+		) types;
 
 		(* cleanup added fields metadata - compatibility with compilation server *)
 		List.iter (fun cf -> remove_class_field_flag cf CfUsed) !(dce.marked_fields);
-	) ()
+	) ();
+	types

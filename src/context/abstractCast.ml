@@ -244,8 +244,8 @@ let find_multitype_specialization' platform a pl p =
 	in
 	cf,follow m,tl
 
-let find_multitype_specialization com a pl p =
-	let cf,m,_ = find_multitype_specialization' com a pl p in
+let find_multitype_specialization platform a pl p =
+	let cf,m,_ = find_multitype_specialization' platform a pl p in
 	(cf,m)
 
 let handle_abstract_casts (scom : SafeCom.t) e =
