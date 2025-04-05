@@ -17,8 +17,8 @@
 	Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *)
 
-open Common
 open Type
+open SafeCom
 open Error
 open Globals
 open FiltersCommon
@@ -29,7 +29,7 @@ let get_native_name = Native.get_native_name
 
 (* Applies exclude macro (which turns types into externs) *)
 
-let apply_macro_exclude com t = match t with
+let apply_macro_exclude t = match t with
 	| TClassDecl c when has_class_flag c CExcluded ->
 		add_class_flag c CExtern
 	| TEnumDecl e when has_enum_flag e EnExcluded ->
@@ -39,16 +39,16 @@ let apply_macro_exclude com t = match t with
 
 (* Removes extern and macro fields, also checks for Void fields *)
 
-let remove_extern_fields com t = match t with
+let remove_extern_fields scom t = match t with
 	| TClassDecl c ->
-		if not (Common.defined com Define.DocGen) then begin
+		if not (Define.defined scom.defines Define.DocGen) then begin
 			c.cl_ordered_fields <- List.filter (fun f ->
-				let b = FilterContext.is_removable_field com.is_macro_context f in
+				let b = FilterContext.is_removable_field scom.is_macro_context f in
 				if b then c.cl_fields <- PMap.remove f.cf_name c.cl_fields;
 				not b
 			) c.cl_ordered_fields;
 			c.cl_ordered_statics <- List.filter (fun f ->
-				let b = FilterContext.is_removable_field com.is_macro_context f in
+				let b = FilterContext.is_removable_field scom.is_macro_context f in
 				if b then c.cl_statics <- PMap.remove f.cf_name c.cl_statics;
 				not b
 			) c.cl_ordered_statics;
@@ -64,19 +64,19 @@ let remove_extern_fields com t = match t with
 let check_private_path com t = match t with
 	| TClassDecl c when c.cl_private ->
 		let rpath = (fst c.cl_module.m_path,"_" ^ snd c.cl_module.m_path) in
-		if com.module_lut#get_type_lut#mem rpath then raise_typing_error ("This private class name will clash with " ^ s_type_path rpath) c.cl_pos;
+		if com.Common.module_lut#get_type_lut#mem rpath then raise_typing_error ("This private class name will clash with " ^ s_type_path rpath) c.cl_pos;
 	| _ ->
 		()
 
 (* Adds the __rtti field if required *)
-let add_rtti com t =
+let add_rtti scom t =
 	let rec has_rtti c =
 		Meta.has Meta.Rtti c.cl_meta || match c.cl_super with None -> false | Some (csup,_) -> has_rtti csup
 	in
 	match t with
 	| TClassDecl c when has_rtti c && not (PMap.mem "__rtti" c.cl_statics) ->
-		let f = mk_field ~static:true "__rtti" com.basic.tstring c.cl_pos null_pos in
-		let str = Genxml.gen_type_string com t in
+		let f = mk_field ~static:true "__rtti" scom.basic.tstring c.cl_pos null_pos in
+		let str = Genxml.gen_type_string t in
 		f.cf_expr <- Some (mk (TConst (TString str)) f.cf_type c.cl_pos);
 		c.cl_ordered_statics <- f :: c.cl_ordered_statics;
 		c.cl_statics <- PMap.add f.cf_name f c.cl_statics;
@@ -84,12 +84,12 @@ let add_rtti com t =
 		()
 
 (* Adds the __meta__ field if required *)
-let add_meta_field com t = match t with
+let add_meta_field (com : Common.context) t = match t with
 	| TClassDecl c ->
 		(match Texpr.build_metadata com.basic t with
 		| None -> ()
 		| Some e ->
-			add_feature com "has_metadata";
+			Common.add_feature com "has_metadata";
 			let cf = mk_field ~static:true "__meta__" e.etype e.epos null_pos in
 			cf.cf_expr <- Some e;
 			let can_deal_with_interface_metadata () = match com.platform with
@@ -150,10 +150,10 @@ let commit_features com t =
 		Common.add_feature com k;
 	) m.m_extra.m_features
 
-let check_reserved_type_paths com t =
+let check_reserved_type_paths scom t =
 	let check path pos =
-		if List.mem path com.config.pf_reserved_type_paths then begin
-			com.warning WReservedTypePath [] ("Type path " ^ (s_type_path path) ^ " is reserved on this target") pos
+		if List.mem path scom.platform_config.pf_reserved_type_paths then begin
+			SafeCom.add_warning scom WReservedTypePath ("Type path " ^ (s_type_path path) ^ " is reserved on this target") pos
 		end
 	in
 	match t with
@@ -178,60 +178,84 @@ let iter_expressions fl mt =
 
 open FilterContext
 
-let destruction com scom ectx detail_times main locals =
-	with_timer com.timer_ctx detail_times "type 2" None (fun () ->
-		(* PASS 2: type filters pre-DCE *)
-		List.iter (fun t ->
-			FiltersCommon.remove_generic_base t;
-			apply_macro_exclude com t;
-			remove_extern_fields com t;
-			(* check @:remove metadata before DCE so it is ignored there (issue #2923) *)
-			check_remove_metadata t;
-		) com.types;
+let destruction_before_dce scom types =
+	let filters = [
+		(fun _ -> FiltersCommon.remove_generic_base);
+		(fun _ -> apply_macro_exclude);
+		(fun _ -> remove_extern_fields scom);
+		(* check @:remove metadata before DCE so it is ignored there (issue #2923) *)
+		(fun _ -> check_remove_metadata);
+	] in
+	SafeCom.run_type_filters_safe scom filters types
+
+let destruction_on_scom scom ectx rename_locals_config types =
+	let filters = [
+		SaveStacks.patch_constructors ectx;
+		(fun _ -> Native.apply_native_paths);
+		(fun _ -> add_rtti scom);
+		(match scom.platform with | Jvm -> (fun _ _ -> ()) | _ -> (fun scom mt -> AddFieldInits.add_field_inits scom.curclass.cl_path rename_locals_config scom mt));
+		(fun _ -> check_void_field);
+		(fun _ -> (match scom.platform with | Cpp -> promote_first_interface_to_super | _ -> (fun _ -> ())));
+		(fun _ -> (if scom.platform_config.pf_reserved_type_paths <> [] then check_reserved_type_paths scom else (fun _ -> ())));
+	] in
+	SafeCom.run_type_filters_safe scom filters types
+
+let destruction_on_com scom com types =
+	let filters = [
+		(fun _ -> check_private_path com);
+		(match com.platform with Hl -> (fun _ _ -> ()) | _ -> (fun _ -> add_meta_field com));
+		(fun _ -> commit_features com);
+	] in
+	(* These aren't actually safe. The logic works fine regardless, we just can't parallelize this at the moment. *)
+	SafeCom.run_type_filters_safe scom filters types
+
+let destruction (com : Common.context) scom ectx detail_times main rename_locals_config types =
+	with_timer scom.timer_ctx detail_times "type 2" None (fun () ->
+		SafeCom.run_with_scom com scom (fun () ->
+			destruction_before_dce scom types
+		)
 	);
-	enter_stage com CDceStart;
-	with_timer com.timer_ctx detail_times "dce" None (fun () ->
+
+	Common.enter_stage com CDceStart;
+	with_timer scom.timer_ctx detail_times "dce" None (fun () ->
 		(* DCE *)
-		let dce_mode = try Common.defined_value com Define.Dce with _ -> "no" in
+		let dce_mode = try Define.defined_value scom.defines Define.Dce with _ -> "no" in
 		let dce_mode = match dce_mode with
-			| "full" -> if Common.defined com Define.Interp then Dce.DceNo else DceFull
+			| "full" -> if Define.defined scom.defines Define.Interp then Dce.DceNo else DceFull
 			| "std" -> DceStd
 			| "no" -> DceNo
 			| _ -> failwith ("Unknown DCE mode " ^ dce_mode)
 		in
 		Dce.run com main dce_mode;
 	);
-	enter_stage com CDceDone;
-	(* PASS 3: type filters post-DCE *)
-	List.iter
-		(SafeCom.run_expression_filters_safe
-			~ignore_processed_status:true
-			scom
-			detail_times
-			(* This has to run after DCE, or otherwise its condition always holds. *)
-			["insert_save_stacks",SaveStacks.insert_save_stacks com ectx]
-		)
-		com.types;
-	let type_filters = [
-		SaveStacks.patch_constructors ectx;
-		(fun _ -> check_private_path com);
-		(fun _ -> Native.apply_native_paths);
-		(fun _ -> add_rtti com);
-		(match com.platform with | Jvm -> (fun _ _ -> ()) | _ -> (fun scom mt -> AddFieldInits.add_field_inits scom.curclass.cl_path locals scom mt));
-		(match com.platform with Hl -> (fun _ _ -> ()) | _ -> (fun _ -> add_meta_field com));
-		(fun _ -> check_void_field);
-		(fun _ -> (match com.platform with | Cpp -> promote_first_interface_to_super | _ -> (fun _ -> ())));
-		(fun _ -> commit_features com);
-		(fun _ -> (if com.config.pf_reserved_type_paths <> [] then check_reserved_type_paths com else (fun _ -> ())));
-	] in
-	with_timer com.timer_ctx detail_times "type 3" None (fun () ->
-		(* These aren't actually safe. The logic works fine regardless, we just can't parallelize this at the moment. *)
-		SafeCom.run_type_filters_safe scom type_filters com.types
-	);
-	com.callbacks#run com.error_ext com.callbacks#get_after_filters;
-	enter_stage com CFilteringDone
+	Common.enter_stage com CDceDone;
 
-let update_cache_dependencies ~close_monomorphs com t =
+	(* This has to run after DCE, or otherwise its condition always holds. *)
+	begin match ectx with
+		| Some ectx when Common.has_feature com "haxe.NativeStackTrace.exceptionStack" ->
+			List.iter (
+				SafeCom.run_expression_filters_safe ~ignore_processed_status:true scom detail_times ["insert_save_stacks",SaveStacks.insert_save_stacks ectx]
+			) types
+		| _ ->
+			()
+	end;
+
+	with_timer scom.timer_ctx detail_times "type 3" None (fun () ->
+		SafeCom.run_with_scom com scom (fun () ->
+			destruction_on_scom scom ectx rename_locals_config types
+		)
+	);
+
+	with_timer scom.timer_ctx detail_times "type 4" None (fun () ->
+		SafeCom.run_with_scom com scom (fun () ->
+			destruction_on_com scom com types
+		)
+	);
+
+	com.callbacks#run com.error_ext com.callbacks#get_after_filters;
+	Common.enter_stage com CFilteringDone
+
+let update_cache_dependencies ~close_monomorphs scom t =
 	let visited_anons = ref [] in
 	let rec check_t m t = match t with
 		| TInst(c,tl) ->
@@ -260,7 +284,7 @@ let update_cache_dependencies ~close_monomorphs com t =
 					check_t m t
 				| _ ->
 					(* Bind any still open monomorph that's part of a signature to Any now (issue #10653) *)
-					if close_monomorphs then Monomorph.do_bind r com.basic.tany;
+					if close_monomorphs then Monomorph.do_bind r scom.basic.tany;
 		end
 		| TLazy f ->
 			check_t m (lazy_type f)
@@ -459,17 +483,17 @@ let run com ectx main before_destruction =
 	let cv_wrapper_impl = CapturedVars.get_wrapper_implementation com in
 	let rename_locals_config = RenameVars.init scom.SafeCom.platform_config com.types in
 	Parallel.run_in_new_pool scom.timer_ctx (fun pool ->
-		SafeCom.run_with_scom com scom pool (fun () ->
+		SafeCom.run_with_scom com scom (fun () ->
 			run_safe_filters ectx scom new_types_array cv_wrapper_impl rename_locals_config pool
 		)
 	);
 	with_timer com.timer_ctx detail_times "callbacks" None (fun () ->
 		com.callbacks#run com.error_ext com.callbacks#get_before_save;
 	);
-	enter_stage com CSaveStart;
+	Common.enter_stage com CSaveStart;
 	with_timer com.timer_ctx detail_times "save state" None (fun () ->
 		List.iter (fun mt ->
-			update_cache_dependencies ~close_monomorphs:true com mt;
+			update_cache_dependencies ~close_monomorphs:true scom mt;
 		) new_types;
 	);
 	(* Note: We cannot have a thread pool up during the before/after_save callbacks because Eval's thread handling
@@ -477,9 +501,9 @@ let run com ectx main before_destruction =
 	Parallel.run_in_new_pool scom.timer_ctx (fun pool ->
 		Parallel.ParallelArray.iter pool (save_class_state com.compilation_step) new_types_array
 	);
-	enter_stage com CSaveDone;
+	Common.enter_stage com CSaveDone;
 	with_timer com.timer_ctx detail_times "callbacks" None (fun () ->
 		com.callbacks#run com.error_ext com.callbacks#get_after_save;
 	);
 	before_destruction();
-	destruction com scom ectx detail_times main rename_locals_config
+	destruction com scom ectx detail_times main rename_locals_config com.types
