@@ -155,7 +155,7 @@ let create com macros =
 	(match m.m_types with
 	| [TClassDecl c1;TClassDecl c2] -> ctx.g.global_using <- (c1,c1.cl_pos) :: (c2,c2.cl_pos) :: ctx.g.global_using
 	| [TClassDecl c1] ->
-		let m = TypeloadModule.load_module ctx (["haxe"],"EnumWithType.valueTools") null_pos in
+		let m = TypeloadModule.load_module ctx (["haxe"],"EnumValueTools") null_pos in
 		(match m.m_types with
 		| [TClassDecl c2 ] -> ctx.g.global_using <- (c1,c1.cl_pos) :: (c2,c2.cl_pos) :: ctx.g.global_using
 		| _ -> die "" __LOC__);
