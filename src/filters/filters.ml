@@ -282,10 +282,10 @@ let update_cache_dependencies ~close_monomorphs com t =
 			()
 
 (* Saves a class state so it can be restored later, e.g. after DCE or native path rewrite *)
-let save_class_state com t =
+let save_class_state compilation_step t =
 	(* Update m_processed here. This means that nothing should add a dependency afterwards because
 	   then the module is immediately considered uncached again *)
-	(t_infos t).mt_module.m_extra.m_processed <- com.compilation_step;
+	(t_infos t).mt_module.m_extra.m_processed <- compilation_step;
 	match t with
 	| TClassDecl c ->
 		let vars = ref [] in
@@ -470,8 +470,12 @@ let run com ectx main before_destruction =
 	with_timer com.timer_ctx detail_times "save state" None (fun () ->
 		List.iter (fun mt ->
 			update_cache_dependencies ~close_monomorphs:true com mt;
-			save_class_state com mt
 		) new_types;
+	);
+	(* Note: We cannot have a thread pool up during the before/after_save callbacks because Eval's thread handling
+	   currently does not get along with it. This is why we need a separate pool for this operation. *)
+	Parallel.run_in_new_pool scom.timer_ctx (fun pool ->
+		Parallel.ParallelArray.iter pool (save_class_state com.compilation_step) new_types_array
 	);
 	enter_stage com CSaveDone;
 	with_timer com.timer_ctx detail_times "callbacks" None (fun () ->
