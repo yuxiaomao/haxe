@@ -51,7 +51,6 @@ class display_handler (jsonrpc : jsonrpc_handler) com (cs : CompilationCache.t) 
 
 	method enable_display ?(skip_define=false) mode =
 		com.display <- create mode;
-		Parser.display_mode := mode;
 		if not skip_define then Common.define_value com Define.Display "1"
 
 	method set_display_file was_auto_triggered requires_offset =
@@ -65,7 +64,7 @@ class display_handler (jsonrpc : jsonrpc_handler) com (cs : CompilationCache.t) 
 		) None in
 
 		let pos = if requires_offset then jsonrpc#get_int_param "offset" else (-1) in
-		Parser.was_auto_triggered := was_auto_triggered;
+		com.parser_state.was_auto_triggered <- was_auto_triggered;
 
 		if file <> file_input_marker then begin
 			let file_unique = com.file_keys#get file in

@@ -29,7 +29,6 @@ let handle_display_argument_old com file_pos actx =
 		let file_unique = com.file_keys#get file in
 		let pos, smode = try ExtString.String.split pos "@" with _ -> pos,"" in
 		let create mode =
-			Parser.display_mode := mode;
 			DisplayTypes.DisplayMode.create mode
 		in
 		let dm = match smode with
@@ -103,17 +102,6 @@ let process_display_configuration ctx =
 			| WMDisable ->
 				()
 		);
-	end;
-	Lexer.old_format := Common.defined com Define.OldErrorFormat;
-	if !Lexer.old_format && !Parser.in_display then begin
-		let p = DisplayPosition.display_position#get in
-		(* convert byte position to utf8 position *)
-		try
-			let content = Std.input_file ~bin:true (Path.get_real_path p.pfile) in
-			let pos = Extlib_leftovers.UTF8.length (String.sub content 0 p.pmin) in
-			DisplayPosition.display_position#set { p with pmin = pos; pmax = pos }
-		with _ ->
-			() (* ignore *)
 	end
 
 let process_display_file com actx =
@@ -276,7 +264,7 @@ let maybe_load_display_file_before_typing tctx display_file_dot_path = match dis
 let handle_display_after_typing ctx tctx display_file_dot_path =
 	let com = ctx.com in
 	if ctx.com.display.dms_kind = DMNone && ctx.has_error then raise Abort;
-	begin match ctx.com.display.dms_kind,!Parser.delayed_syntax_completion with
+	begin match ctx.com.display.dms_kind,Atomic.get ctx.com.parser_state.delayed_syntax_completion with
 		| DMDefault,Some(kind,subj) -> DisplayOutput.handle_syntax_completion com kind subj
 		| _ -> ()
 	end;

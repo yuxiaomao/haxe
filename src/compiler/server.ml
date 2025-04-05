@@ -57,12 +57,12 @@ let parse_file cs com (rfile : ClassPaths.resolved_file) p =
 			try
 				let cfile = cc#find_file fkey in
 				if cfile.c_time <> ftime then raise Not_found;
-				Parser.ParseSuccess((cfile.c_package,cfile.c_decls),false,cfile.c_pdi)
+				Parser.ParseSuccess((cfile.c_package,cfile.c_decls),cfile.c_pdi)
 			with Not_found ->
 				let parse_result = TypeloadParse.parse_file com rfile p in
 				let info,is_unusual = match parse_result with
 					| ParseError(_,_,_) -> "not cached, has parse error",true
-					| ParseSuccess(data,is_display_file,pdi) ->
+					| ParseSuccess(data,pdi) ->
 						if is_display_file then begin
 							if pdi.pd_errors <> [] then
 								"not cached, is display file with parse errors",true
@@ -75,7 +75,7 @@ let parse_file cs com (rfile : ClassPaths.resolved_file) p =
 							(* We assume that when not in display mode it's okay to cache stuff that has #if display
 							checks. The reasoning is that non-display mode has more information than display mode. *)
 							if com.display.dms_full_typing then raise Not_found;
-							let ident = Hashtbl.find Parser.special_identifier_files fkey in
+							let ident = ThreadSafeHashtbl.find com.parser_state.special_identifier_files fkey in
 							Printf.sprintf "not cached, using \"%s\" define" ident,true
 						with Not_found ->
 							cc#cache_file fkey (ClassPaths.create_resolved_file ffile rfile.class_path) ftime data pdi;
@@ -295,7 +295,7 @@ let check_module sctx com m_path m_extra p =
 				end
 		in
 		let has_policy policy = List.mem policy m_extra.m_check_policy || match policy with
-			| NoFileSystemCheck when !ServerConfig.do_not_check_modules && !Parser.display_mode <> DMNone -> true
+			| NoFileSystemCheck when !ServerConfig.do_not_check_modules && com.display.dms_kind <> DMNone -> true
 			| _ -> false
 		in
 		let check_file () =

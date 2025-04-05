@@ -31,21 +31,24 @@ open Error
 exception DisplayInMacroBlock
 
 let parse_file_from_lexbuf com file p lexbuf =
-	Lexer.init file;
 	incr stats.s_files_parsed;
 	let parse_result = try
-		ParserEntry.parse Grammar.parse_file com.defines lexbuf file
+		ParserEntry.parse (ParserConfig.file_parser_config com file) Grammar.parse_file (Lexer.create_file_ctx file) lexbuf file
 	with
 		| Sedlexing.MalFormed ->
 			raise_typing_error "Malformed file. Source files must be encoded with UTF-8." (file_pos file)
 		| e ->
 			raise e
 	in
-	begin match !Parser.display_mode,parse_result with
+	begin match com.display.dms_kind,parse_result with
 		| DMModuleSymbols (Some ""),_ -> ()
-		| DMModuleSymbols filter,(ParseSuccess(data,_,_)) when filter = None && DisplayPosition.display_position#is_in_file (com.file_keys#get file) ->
+		| DMModuleSymbols filter,(ParseSuccess(data,_)) when filter = None && DisplayPosition.display_position#is_in_file (com.file_keys#get file) ->
 			let ds = DocumentSymbols.collect_module_symbols None (filter = None) data in
 			DisplayException.raise_module_symbols (DocumentSymbols.Printer.print_module_symbols com [file,ds] filter);
+		| _,ParseSuccess(_,({pd_was_display_file = true} as pdi)) ->
+			if pdi.pd_had_resume then
+				com.parser_state.had_parser_resume <- true;
+			Atomic.set com.parser_state.delayed_syntax_completion pdi.pd_delayed_syntax_completion
 		| _ ->
 			()
 	end;
@@ -124,7 +127,7 @@ let resolve_module_file com m remap p =
 			| [] -> []
 		in
 		let meta = match parse_result with
-			| ParseSuccess((_,decls),_,_) -> loop decls
+			| ParseSuccess((_,decls),_) -> loop decls
 			| ParseError _ -> []
 		in
 		if not (Meta.has Meta.NoPackageRestrict meta) then begin
@@ -229,7 +232,7 @@ module PdiHandler = struct
 		ParserEntry.is_true (ParserEntry.eval defines e)
 
 	let handle_pdi com pdi =
-		let macro_defines = adapt_defines_to_macro_context com.defines in
+		let macro_defines = adapt_defines_to_macro_context com.Common.defines in
 		let check = (if com.display.dms_kind = DMHover then
 			encloses_position_gt
 		else
@@ -269,8 +272,8 @@ let handle_parser_result com p result =
 				com.has_error <- true
 	in
 	match result with
-		| ParseSuccess(data,is_display_file,pdi) ->
-			if is_display_file then begin
+		| ParseSuccess(data,pdi) ->
+			if pdi.pd_was_display_file then begin
 				begin match pdi.pd_errors with
 				| (msg,p) :: _ -> handle_parser_error msg p
 				| [] -> ()
