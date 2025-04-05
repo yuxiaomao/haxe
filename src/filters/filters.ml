@@ -19,7 +19,6 @@
 
 open Common
 open Type
-open Typecore
 open Error
 open Globals
 open FiltersCommon
@@ -179,9 +178,8 @@ let iter_expressions fl mt =
 
 open FilterContext
 
-let destruction tctx scom ectx detail_times main locals =
-	let com = tctx.com in
-	with_timer tctx.com.timer_ctx detail_times "type 2" None (fun () ->
+let destruction com scom ectx detail_times main locals =
+	with_timer com.timer_ctx detail_times "type 2" None (fun () ->
 		(* PASS 2: type filters pre-DCE *)
 		List.iter (fun t ->
 			FiltersCommon.remove_generic_base t;
@@ -192,7 +190,7 @@ let destruction tctx scom ectx detail_times main locals =
 		) com.types;
 	);
 	enter_stage com CDceStart;
-	with_timer tctx.com.timer_ctx detail_times "dce" None (fun () ->
+	with_timer com.timer_ctx detail_times "dce" None (fun () ->
 		(* DCE *)
 		let dce_mode = try Common.defined_value com Define.Dce with _ -> "no" in
 		let dce_mode = match dce_mode with
@@ -206,36 +204,29 @@ let destruction tctx scom ectx detail_times main locals =
 	enter_stage com CDceDone;
 	(* PASS 3: type filters post-DCE *)
 	List.iter
-		(run_expression_filters
+		(SafeCom.run_expression_filters_safe
 			~ignore_processed_status:true
-			tctx
+			scom
 			detail_times
 			(* This has to run after DCE, or otherwise its condition always holds. *)
-			["insert_save_stacks",(fun tctx -> SaveStacks.insert_save_stacks tctx ectx)]
+			["insert_save_stacks",SaveStacks.insert_save_stacks com ectx]
 		)
 		com.types;
 	let type_filters = [
-		(fun tctx -> SaveStacks.patch_constructors tctx ectx); (* TODO: I don't believe this should load_instance anything at this point... *)
+		SaveStacks.patch_constructors ectx;
 		(fun _ -> check_private_path com);
 		(fun _ -> Native.apply_native_paths);
 		(fun _ -> add_rtti com);
-		(match com.platform with | Jvm -> (fun _ _ -> ()) | _ -> (fun tctx mt -> AddFieldInits.add_field_inits tctx.c.curclass.cl_path locals scom mt));
+		(match com.platform with | Jvm -> (fun _ _ -> ()) | _ -> (fun scom mt -> AddFieldInits.add_field_inits scom.curclass.cl_path locals scom mt));
 		(match com.platform with Hl -> (fun _ _ -> ()) | _ -> (fun _ -> add_meta_field com));
 		(fun _ -> check_void_field);
 		(fun _ -> (match com.platform with | Cpp -> promote_first_interface_to_super | _ -> (fun _ -> ())));
 		(fun _ -> commit_features com);
 		(fun _ -> (if com.config.pf_reserved_type_paths <> [] then check_reserved_type_paths com else (fun _ -> ())));
 	] in
-	with_timer tctx.com.timer_ctx detail_times "type 3" None (fun () ->
-		List.iter (fun t ->
-			let tctx = match t with
-				| TClassDecl c ->
-					TyperManager.clone_for_class tctx c
-				| _ ->
-					tctx
-			in
-			List.iter (fun f -> f tctx t) type_filters
-		) com.types;
+	with_timer com.timer_ctx detail_times "type 3" None (fun () ->
+		(* These aren't actually safe. The logic works fine regardless, we just can't parallelize this at the moment. *)
+		SafeCom.run_type_filters_safe scom type_filters com.types
 	);
 	com.callbacks#run com.error_ext com.callbacks#get_after_filters;
 	enter_stage com CFilteringDone
@@ -424,8 +415,7 @@ let run_safe_filters ectx (scom : SafeCom.t) new_types_array cv_wrapper_impl ren
 	(* enter_stage com CAnalyzerDone; *)
 	Parallel.ParallelArray.iter pool (SafeCom.run_expression_filters_safe scom detail_times filters_after_analyzer) new_types_array
 
-let run tctx ectx main before_destruction =
-	let com = tctx.com in
+let run com ectx main before_destruction =
 	let scom = SafeCom.of_com com in
 	let detail_times = Timer.level_from_define com.defines Define.FilterTimes in
 	let new_types = List.filter (fun t ->
@@ -488,4 +478,4 @@ let run tctx ectx main before_destruction =
 		com.callbacks#run com.error_ext com.callbacks#get_after_save;
 	);
 	before_destruction();
-	destruction tctx scom ectx detail_times main rename_locals_config
+	destruction com scom ectx detail_times main rename_locals_config
