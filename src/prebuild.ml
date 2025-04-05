@@ -105,18 +105,31 @@ let get_field name map fields =
 	| None -> raise (Prebuild_error ("field `" ^ name ^ "` has invalid data"))
 	| Some v -> v
 
+type parsed_define = {
+	d_name : string;
+	d_define : string;
+	d_doc : string;
+	d_params : string list;
+	d_platforms : string list;
+	d_links: string list;
+	d_deprecated : string option;
+	d_deprecated_define : string option;
+}
 let parse_define json =
 	let fields = match json with
 		| JObject fl -> fl
 		| _ -> raise (Prebuild_error "not an object")
 	in
-	(* name *) get_field "name" as_string fields,
-	(* define *) get_field "define" as_string fields,
-	(* doc *) get_field "doc" as_string fields,
-	(* params *) get_optional_field "params" as_params [] fields,
-	(* platforms *) get_optional_field "platforms" as_platforms [] fields,
-	(* links *) get_optional_field "links" as_links [] fields,
-	(* deprecated *) get_optional_field2 "deprecated" as_string fields
+	{
+		d_name = get_field "name" as_string fields;
+		d_define = get_field "define" as_string fields;
+		d_doc = get_field "doc" as_string fields;
+		d_params = get_optional_field "params" as_params [] fields;
+		d_platforms = get_optional_field "platforms" as_platforms [] fields;
+		d_links = get_optional_field "links" as_links [] fields;
+		d_deprecated = get_optional_field2 "deprecated" as_string fields;
+		d_deprecated_define = get_optional_field2 "deprecatedDefine" as_string fields;
+	}
 
 let parse_meta json =
 	let fields = match json with
@@ -180,7 +193,7 @@ let gen_params = List.map (function param -> "HasParam \"" ^ param ^ "\"" )
 let gen_links = List.map (function link -> "Link \"" ^ link ^ "\"" )
 
 let gen_define_type defines =
-	String.concat "\n" (List.map (function (name, _, _, _, _, _, _) -> "\t| " ^ name) defines)
+	String.concat "\n" (List.map (function def -> "\t| " ^ def.d_name) defines)
 
 let gen_option f = function
 	| None -> "None"
@@ -189,22 +202,29 @@ let gen_option f = function
 let gen_define_info defines =
 	let deprecations = DynArray.create() in
 	let define_str = List.map (function
-		(name, define, doc, params, platforms, links, deprecated) ->
-			let platforms_str = gen_platforms platforms in
-			let params_str = gen_params params in
-			let links_str = gen_links links in
-			let define = String.concat "_" (ExtString.String.nsplit define "-") in
-			let deprecated = match deprecated with
+		def ->
+			let platforms_str = gen_platforms def.d_platforms in
+			let params_str = gen_params def.d_params in
+			let links_str = gen_links def.d_links in
+			let convert_define s = String.concat "_" (ExtString.String.nsplit s "-") in
+			let define = convert_define def.d_define in
+			let deprecated = match def.d_deprecated with
 				| None ->
+					begin match def.d_deprecated_define with
+					| None ->
+						()
+					| Some s ->
+						DynArray.add deprecations (Printf.sprintf "\t(%S,InFavorOf(%S));" (convert_define s) define)
+					end;
 					[]
 				| Some x ->
 					let quoted = Printf.sprintf "%S" x in
-					DynArray.add deprecations (Printf.sprintf "\t(%S,%S)" define x);
+					DynArray.add deprecations (Printf.sprintf "\t(%S,DueTo(%S));" define x);
 					[Printf.sprintf "Deprecated(%s)" quoted]
 			in
-			"\t| " ^ name ^ " -> \"" ^ define ^ "\",(" ^ (Printf.sprintf "%S" doc) ^ ",[" ^ (String.concat "; " (platforms_str @ params_str @ links_str @ deprecated)) ^ "])"
+			"\t| " ^ def.d_name ^ " -> \"" ^ define ^ "\",(" ^ (Printf.sprintf "%S" def.d_doc) ^ ",[" ^ (String.concat "; " (platforms_str @ params_str @ links_str @ deprecated)) ^ "])"
 	) defines in
-	String.concat "\n" define_str,String.concat ";\n" (DynArray.to_list deprecations)
+	String.concat "\n" define_str,String.concat "\n" (DynArray.to_list deprecations)
 
 let gen_meta_type metas =
 	String.concat "\n" (List.map (function
@@ -278,6 +298,11 @@ type define_parameter =
 	| Platforms of platform list
 	| Link of string
 	| Deprecated of string
+
+type define_deprecation =
+	| DueTo of string
+	| InFavorOf of string
+
 "
 
 let meta_header = autogen_header ^ "

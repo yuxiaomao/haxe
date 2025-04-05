@@ -274,11 +274,17 @@ end
 
 let check_defines com =
 	if is_next com then begin
-		PMap.iter (fun k _ ->
+		PMap.iter (fun k v ->
 			try
 				let reason = Hashtbl.find Define.deprecation_lut k in
 				let p = fake_pos ("-D " ^ k) in
-				com.warning WDeprecatedDefine [] reason p
+				begin match reason with
+				| DueTo reason ->
+					com.warning WDeprecatedDefine [] reason p
+				| InFavorOf d ->
+					Define.raw_define_value com.defines d v;
+					com.warning WDeprecatedDefine [] (Printf.sprintf "-D %s has been deprecated in favor of -D %s" k d) p
+				end;
 			with Not_found ->
 				()
 		) com.defines.values
