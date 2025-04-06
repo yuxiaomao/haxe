@@ -333,7 +333,13 @@ and parse_type_decl ctx mode s =
 					}, punion p1 p2)
 				| [ ] -> check_type_decl_flag_completion ctx mode c s)
 			| _ ->
-				check_type_decl_flag_completion ctx mode c s
+				begin match meta with
+					| (_,_,p) :: _ ->
+						syntax_error ctx ~pos:(Some p) (Custom "Type or field expected after metadata") s ()
+					| [] ->
+						()
+				end;
+				check_type_decl_flag_completion ctx mode c s;
 
 
 and parse_class ctx doc meta cflags need_name s =
