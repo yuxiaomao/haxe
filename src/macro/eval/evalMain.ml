@@ -98,6 +98,7 @@ let create com api is_macro =
 	} in
 	let eval = EvalThread.create_eval thread in
 	let evals = ThreadSafeHashtbl.create 1 in
+	ThreadSafeHashtbl.add evals 0 eval;
 	let ctx = {
 		ctx_id = !GlobalState.sid;
 		is_macro = is_macro;
