@@ -478,7 +478,6 @@ let create_typer_context_for_class ctx cctx p =
 	incr stats.s_classes_built;
 	let c = cctx.tclass in
 	if cctx.is_lib && not (has_class_flag c CExtern) then ctx.com.error "@:libType can only be used in extern classes" c.cl_pos;
-	if Meta.has Meta.Macro c.cl_meta then display_error ctx.com "Macro classes are no longer allowed in haxe 3" c.cl_pos;
 	TyperManager.clone_for_class ctx c
 
 let create_field_context ctx cctx cff is_display_file display_modifier =
