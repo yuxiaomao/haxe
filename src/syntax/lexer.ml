@@ -56,6 +56,12 @@ type xml_lexing_context = {
 	lexbuf : Sedlexing.lexbuf;
 }
 
+type format_context = {
+	format_buffer : Buffer.t;
+	mutable format_quote_open : bool;
+	mutable format_quote_pmin : int;
+}
+
 let error_msg = function
 	| Invalid_character c when c > 32 && c < 128 -> Printf.sprintf "Invalid character '%c'" (char_of_int c)
 	| Invalid_character c -> Printf.sprintf "Invalid character 0x%.2X" c
@@ -448,7 +454,21 @@ let string ctx lexbuf =
 	in
 	loop ()
 
-let rec string2 ctx lexbuf =
+let add_format_part fmt part =
+	Buffer.add_string fmt.format_buffer part
+
+let consume_buffer ctx fmt lexbuf f =
+	let s = Buffer.contents ctx.buf in
+	reset ctx;
+	add_format_part fmt (f s)
+
+let unescape_format ctx fmt s =
+	try
+		unescape s
+	with Invalid_escape_sequence(c,i,msg) ->
+		error ctx (Invalid_escape (c,msg)) (fmt.format_quote_pmin + i)
+
+let rec string2 ctx fmt lexbuf =
 	let rec loop () = match%sedlex lexbuf with
 		| eof ->
 			raise Exit
@@ -466,14 +486,17 @@ let rec string2 ctx lexbuf =
 			store ctx lexbuf;
 			loop ();
 		| "'" ->
+			consume_buffer ctx fmt lexbuf (fun s -> if fmt.format_quote_open then s else unescape_format ctx fmt s);
+			if fmt.format_quote_open then add_format_part fmt "'";
 			lexeme_end lexbuf
 		| "$$" | "\\$" | '$' ->
 			store ctx lexbuf;
 			loop ();
 		| "${" ->
 			let pmin = lexeme_start lexbuf in
-			store ctx lexbuf;
-			(try code_string ctx lexbuf with Exit -> error ctx Unclosed_code pmin);
+			consume_buffer ctx fmt lexbuf (fun s -> if fmt.format_quote_open then s else unescape_format ctx fmt s);
+			add_format_part fmt "${";
+			(try code_string ctx fmt lexbuf with Exit -> error ctx Unclosed_code pmin);
 			loop ();
 		| Plus (Compl ('\'' | '\\' | '\r' | '\n' | '$')) ->
 			store ctx lexbuf;
@@ -483,7 +506,7 @@ let rec string2 ctx lexbuf =
 	in
 	loop ()
 
-and code_string ctx lexbuf =
+and code_string ctx fmt lexbuf =
 	let rec loop open_braces = match%sedlex lexbuf with
 		| eof -> raise Exit
 		| '\n' | '\r' | "\r\n" ->
@@ -497,8 +520,13 @@ and code_string ctx lexbuf =
 			store ctx lexbuf;
 			loop open_braces
 		| '}' ->
-			store ctx lexbuf;
-			if open_braces > 0 then loop (open_braces - 1)
+			if open_braces > 0 then begin
+				store ctx lexbuf;
+				loop (open_braces - 1)
+			end else begin
+				consume_buffer ctx fmt lexbuf (fun s -> s);
+				add_format_part fmt "}"
+			end
 		| '"' ->
 			add ctx "\"";
 			let pmin = lexeme_start lexbuf in
@@ -506,10 +534,15 @@ and code_string ctx lexbuf =
 			add ctx "\"";
 			loop open_braces
 		| "'" ->
-			add ctx "'";
 			let pmin = lexeme_start lexbuf in
-			(try ignore(string2 ctx lexbuf) with Exit -> error ctx Unterminated_string pmin);
-			add ctx "'";
+			consume_buffer ctx fmt lexbuf (fun s -> s);
+			add_format_part fmt "'";
+			let old_quote,old_pmin = fmt.format_quote_open,fmt.format_quote_pmin in
+			fmt.format_quote_open <- true;
+			fmt.format_quote_pmin <- pmin;
+			(try ignore(string2 ctx fmt lexbuf) with Exit -> error ctx Unterminated_string pmin);
+			fmt.format_quote_open <- old_quote;
+			fmt.format_quote_pmin <- old_pmin;
 			loop open_braces
 		| "/*" ->
 			let pmin = lexeme_start lexbuf in
@@ -717,9 +750,13 @@ let rec token ctx lexbuf =
 	| "'" ->
 		reset ctx;
 		let pmin = lexeme_start lexbuf in
-		let pmax = (try string2 ctx lexbuf with Exit -> error ctx Unterminated_string pmin) in
-		let str = (try unescape (contents ctx) with Invalid_escape_sequence(c,i,msg) -> error ctx (Invalid_escape (c,msg)) (pmin + i)) in
-		mk_tok (Const (String(str,SSingleQuotes))) pmin pmax;
+		let fmt = {
+			format_buffer = Buffer.create 10;
+			format_quote_open = false;
+			format_quote_pmin = pmin;
+		} in
+		let pmax = (try string2 ctx fmt lexbuf with Exit -> error ctx Unterminated_string pmin) in
+		mk_tok (Const (String(Buffer.contents fmt.format_buffer,SSingleQuotes))) pmin pmax;
 	| "~/" ->
 		reset ctx;
 		let pmin = lexeme_start lexbuf in
