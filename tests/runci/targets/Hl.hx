@@ -90,6 +90,7 @@ class Hl {
 
 		runCommand(compiler, [
 			"-o", '$dir/$filename.exe',
+			"-O2",
 			'$dir/$filename.c',
 			'-I$dir',
 			'-I$hlInstallDir/include',
