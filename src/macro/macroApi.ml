@@ -1132,10 +1132,10 @@ and encode_var_access a =
 		| AccNo -> 1, []
 		| AccNever -> 2, []
 		| AccCall -> 4, []
-		| AccInline	-> 5, []
-		| AccRequire (s,msg) -> 6, [encode_string s; null encode_string msg]
-		| AccCtor -> 7, []
-		| AccPrivateCall -> 8, []
+		| AccPrivateCall -> 5, []
+		| AccInline	-> 6, []
+		| AccRequire (s,msg) -> 7, [encode_string s; null encode_string msg]
+		| AccCtor -> 8, []
 	) in
 	encode_enum IVarAccess tag pl
 
@@ -1459,10 +1459,10 @@ let decode_var_access v =
 	| 1, [] -> AccNo
 	| 2, [] -> AccNever
 	| 4, [] -> AccCall
-	| 5, [] -> AccInline
-	| 6, [s1;s2] -> AccRequire(decode_string s1, opt decode_string s2)
-	| 7, [] -> AccCtor
-	| 8, [] -> AccPrivateCall
+	| 5, [] -> AccPrivateCall
+	| 6, [] -> AccInline
+	| 7, [s1;s2] -> AccRequire(decode_string s1, opt decode_string s2)
+	| 8, [] -> AccCtor
 	| _ -> raise Invalid_expr
 
 let decode_method_kind v =
