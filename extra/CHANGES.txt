@@ -26,7 +26,7 @@
 	macro : Build macro order vs inheritance (#11582)
 	macro : disallow defining types into existing modules (#11845)
 
-	General impronements:
+	General improvements:
 
 	all : hxb (new server cache + pre compilation) (#11504)
 	all : rework module resolution (#11168)
