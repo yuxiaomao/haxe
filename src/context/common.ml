@@ -692,9 +692,6 @@ let get_config com =
 				vs_scope = BlockScope;
 				vs_flags = [NoShadowing]
 			};
-			pf_exceptions = { default_config.pf_exceptions with
-				ec_avoid_wrapping = false
-			}
 		}
 	| Eval ->
 		{
