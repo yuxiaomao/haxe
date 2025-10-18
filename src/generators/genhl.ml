@@ -1184,7 +1184,7 @@ and cast_to ?(force=false) ctx (r:reg) (t:ttype) p =
 		let tmp = alloc_tmp ctx t in
 		op ctx (OToSFloat (tmp, r));
 		tmp
-	| (HUI8 | HUI16 | HI32 | HI64 | HF32 | HF64), (HUI8 | HUI16 | HI32 | HI64) ->
+	| (HUI8 | HUI16 | HI32 | HI64 | HF32 | HF64 | HGUID), (HUI8 | HUI16 | HI32 | HI64 | HGUID) ->
 		let tmp = alloc_tmp ctx t in
 		op ctx (OToInt (tmp, r));
 		tmp
