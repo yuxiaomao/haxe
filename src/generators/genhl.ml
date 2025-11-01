@@ -4256,7 +4256,22 @@ let add_types ctx types =
 				| _ ->
 					false
 			in
-			List.iter (fun f -> if has_class_field_flag f CfOverride then ignore(loop c.cl_super f)) c.cl_ordered_fields;
+			let rec check_virtual_rec c =
+				has_meta (Meta.Custom ":virtual") c.cl_meta || (match c.cl_super with None -> false | Some (c,_) -> check_virtual_rec c)
+			in
+			if check_virtual_rec c then begin
+				(*
+					Assume all fields and superclass fields are overriden from this base class
+				*)
+				let rec loop_cl c =
+					List.iter (fun f -> ignore(loop (Some (c,[])) f)) c.cl_ordered_fields;
+					match c.cl_super with
+					| None -> ()
+					| Some (c,_) -> loop_cl c
+				in
+				loop_cl c
+			end else
+				List.iter (fun f -> if has_class_field_flag f CfOverride then ignore(loop c.cl_super f)) c.cl_ordered_fields;
 			List.iter (fun (m,args,p) ->
 				if m = Meta.HlNative then
 					let lib, prefix = (match args with
