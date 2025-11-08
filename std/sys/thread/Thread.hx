@@ -136,7 +136,7 @@ class Thread {
 		Creates a new thread that will execute the `job` function, then exit after all events are processed.
 		You can specify a custom exception handler `onAbort` or else `Thread.onAbort` will be called.
 	**/
-	public static function create(job:()->Void,?onAbort):Thread {
+	public static function create(job:()->Void,?name:String,?onAbort):Thread {
 		mutex.acquire();
 		var t = new Thread(null);
 		t.events = new haxe.EventLoop();
@@ -146,6 +146,7 @@ class Thread {
 			t.onAbort = onAbort;
 		t.impl = ThreadImpl.create(function() {
 			t.impl = ThreadImpl.current();
+			if( name != null ) t.name = name;
 			currentTLS.value = t;
 			var exception = null;
 			try {
@@ -162,6 +163,7 @@ class Thread {
 				t.onAbort(exception);
 			@:privateAccess main().events.wakeup();
 		});
+		if( name != null ) t.name = name;
 		return t;
 	}
 
