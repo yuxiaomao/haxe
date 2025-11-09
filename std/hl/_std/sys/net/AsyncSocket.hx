@@ -120,4 +120,22 @@ class AsyncSocket {
 		}
 	}
 
+	public function writeString( str : String ) {
+		var buf = haxe.io.Bytes.ofString(str);
+		write(buf, 0, buf.length);
+	}
+
+	public static function startServer( host, port, onClient ) {
+		var s = new AsyncSocket();
+		s.onDisconnect = function() {
+			onClient(null);
+		};
+		s.onConnect = function() {
+			onClient(s.accept());
+		};
+		s.bind(new Host(host), port);
+		s.listen(1);
+		return s;
+	}
+
 }

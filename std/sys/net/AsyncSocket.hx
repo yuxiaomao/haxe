@@ -107,4 +107,30 @@ class AsyncSocket {
 		}
 	}
 
+	/**
+		Similar to `write` but sends a whole string data.
+	**/
+	public function writeString( str : String ) {
+		var buf = haxe.io.Bytes.ofString(str);
+		write(buf, 0, buf.length);
+	}
+
+
+	/**
+		Start a server on given host/port and callback `onClient` everytime a client connects.
+		Will also call `onClient(null)` in the rare case where the server connection is lost.
+	**/
+	public static function startServer( host, port, onClient ) {
+		var s = new AsyncSocket();
+		s.onDisconnect = function() {
+			onClient(null);
+		};
+		s.onConnect = function() {
+			onClient(s.accept());
+		};
+		s.bind(new Host(host), port);
+		s.listen(1);
+		return s;
+	}
+
 }
