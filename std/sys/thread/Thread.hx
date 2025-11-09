@@ -92,6 +92,7 @@ class Thread {
 		threads.remove(this);
 		mutex.release();
 		currentTLS.value = null;
+		events.dispose();
 	}
 
 	public static function readMessage( blocking : Bool ) : Null<Dynamic> {

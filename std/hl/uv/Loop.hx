@@ -47,17 +47,12 @@ abstract Loop(hl.Abstract<"uv_loop">) {
 	@:hlNative("uv", #if (hl_ver >= version("1.16.0")) "stop_wrap" #else "stop" #end)
 	public function stop():Void {}
 
+	public static function getCurrent():Loop {
+		return @:privateAccess haxe.EventLoop.current.getUVLoop();
+	}
+
 	public static function getDefault():Loop {
-		var def = default_loop();
-		if (loopEvent == null)
-			loopEvent = haxe.MainLoop.add(function() {
-				// if no more things to process, stop
-				if (def.run(NoWait) == 0) {
-					loopEvent.stop();
-					loopEvent = null;
-				}
-			});
-		return def;
+		return @:privateAccess haxe.EventLoop.main.getUVLoop();
 	}
 
 	@:hlNative("uv", #if (hl_ver >= version("1.16.0")) "default_loop_wrap" #else "default_loop" #end)
@@ -65,5 +60,10 @@ abstract Loop(hl.Abstract<"uv_loop">) {
 		return null;
 	}
 
-	static var loopEvent:haxe.MainLoop.MainEvent;
+	#if (hl_ver >= version("1.16.0"))
+	@:hlNative("uv", "create_loop") public static function create():Loop {
+		return null;
+	}
+	#end
+
 }
