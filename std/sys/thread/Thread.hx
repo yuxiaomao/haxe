@@ -141,6 +141,7 @@ class Thread {
 		mutex.acquire();
 		var t = new Thread(null);
 		t.events = new haxe.EventLoop();
+		t.events.thread = t;
 		threads.push(t);
 		mutex.release();
 		if( onAbort != null )
@@ -208,6 +209,7 @@ class Thread {
 		mainThread = new Thread(ThreadImpl.current());
 		mainThread.name = "Main";
 		mainThread.events = haxe.EventLoop.main;
+		mainThread.events.thread = mainThread;
 		threads = [mainThread];
 		currentTLS = new Tls();
 		currentTLS.value = mainThread;
