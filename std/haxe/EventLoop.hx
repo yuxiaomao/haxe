@@ -84,6 +84,7 @@ class EventLoop {
 	var events : Event;
 	var inLoop : Bool;
 	var hasPendingRemove : Bool;
+	var promiseCount : Int = 0;
 	#if target.threaded
 	var mutex : sys.thread.Mutex;
 	var lockTime : sys.thread.Lock;
@@ -137,7 +138,7 @@ class EventLoop {
 	**/
 	public function loop() {
 		checkThread();
-		while( hasEvents(true) || (this == main && hasRunningThreads()) ) {
+		while( hasEvents(true) || promiseCount > 0 || (this == main && hasRunningThreads()) ) {
 			var time = getNextTick();
 			#if hl
 			// disable wait if we have our uvloop alive
@@ -150,6 +151,30 @@ class EventLoop {
 			}
 			loopOnce(false);
 		}
+	}
+
+	/**
+		Promise a possible future event addition. This will prevent the `loop()` from terminating until the matching number of `deliver()` calls have been made.
+	**/
+	public function promise() {
+		lock();
+		promiseCount++;
+		unlock();
+	}
+
+	/**
+		Deliver after a `promise()`. This will throw an exception if more `deliver()` calls has been made than corresponding `promise()` calls.
+	**/
+	public function deliver() {
+		lock();
+		if( promiseCount == 0 ) {
+			unlock();
+			throw "Too many calls to deliver()";
+		}
+		promiseCount--;
+		unlock();
+		if( promiseCount == 0 )
+			wakeup();
 	}
 
 	inline function wakeup() {
