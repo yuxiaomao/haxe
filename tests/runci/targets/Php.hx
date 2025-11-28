@@ -58,7 +58,8 @@ class Php {
 			case "Linux":
 				Linux.requireAptPackages(["php-cli", "php-mbstring", "php-sqlite3"]);
 			case "Mac":
-				runNetworkCommand("brew", ["install", "php"]);
+				runNetworkCommand("brew", ["install", "php@8.4"]);
+				runCommand("brew", ["link", "--overwrite", "--force", "php@8.4"]);
 			case "Windows":
 				runNetworkCommand("cinst", ["php", "-version", "7.1.8", "-y"]);
 			case _:
