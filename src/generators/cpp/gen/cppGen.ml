@@ -43,7 +43,7 @@ let print_arg v default_val prefix =
 
 (* Generate prototype text, including allowing default values to be null *)
 let print_arg_name v default_val prefix =
-  type_arg_to_string v default_val prefix |> fst
+  type_arg_to_string v default_val prefix |> snd
 
 let print_arg_list arg_list prefix =
   String.concat ","
