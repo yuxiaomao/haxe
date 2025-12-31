@@ -64,8 +64,13 @@ let valid_redefinition map1 map2 f1 t1 f2 t2 = (* child, parent *)
 	end;
 	begin match f1.cf_kind,f2.cf_kind with
 	| Method m1, Method m2 when not (m1 = MethDynamic) && not (m2 = MethDynamic) ->
-		begin match follow t1, follow t2 with
-		| TFun (args1,r1) , TFun (args2,r2) ->
+		begin match follow_with_coro t1, follow_with_coro t2 with
+		| Coro _,NotCoro _ ->
+			raise (Unify_error [Unify_custom "Method should be coroutine"])
+		| NotCoro _,Coro _ ->
+			raise (Unify_error [Unify_custom "Method should not be coroutine"]);
+		| NotCoro (TFun (args1,r1)), NotCoro(TFun (args2,r2))
+		| Coro (args1,r1), Coro(args2,r2) ->
 			if not (List.length args1 = List.length args2) then raise (Unify_error [Unify_custom "Different number of function arguments"]);
 			let i = ref 0 in
 			begin try
