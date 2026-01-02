@@ -3520,8 +3520,9 @@ let generate_member ctx c f =
 		let ff = match f.cf_expr with
 			| Some { eexpr = TFunction f } -> f
 			| None when has_class_field_flag f CfAbstract ->
-				let tl,tr = match follow f.cf_type with
-					| TFun(tl,tr) -> tl,tr
+				let tl,tr = match follow_with_coro f.cf_type with
+					| NotCoro TFun(tl,tr) -> tl,tr
+					| Coro(tl,tr) -> Common.expand_coro_type ctx.com.basic tl tr
 					| _ -> die "" __LOC__
 				in
 				let args = List.map (fun (n,_,t) ->
