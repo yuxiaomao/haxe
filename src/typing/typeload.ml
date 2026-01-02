@@ -570,9 +570,15 @@ and load_complex_type' ctx allow_display mode (t,p) =
 					let old = ctx.type_params in
 					ctx.type_params <- !params @ old;
 					let args = List.map (fun ((name,_),o,_,t,e) -> no_expr e; name, o, topt LoadNormal t) fd.f_args in
-					let t = TFun (args,topt LoadReturn fd.f_type), Method (if !dyn then MethDynamic else MethNormal) in
+					let ret = topt LoadReturn fd.f_type in
+					let is_coroutine = Meta.has Meta.Coroutine f.cff_meta in
+					let t = if is_coroutine then
+						(Lazy.force ctx.t.tcoro.tcoro) args ret
+					else
+						TFun (args,ret)
+					in
 					ctx.type_params <- old;
-					t
+					t,Method (if !dyn then MethDynamic else MethNormal)
 				| FProp (i1,i2,t,e) ->
 					no_expr e;
 					let access (m,_) get =

@@ -3006,8 +3006,11 @@ let generate_anons gctx pool =
 			List.iter (fun cf ->
 				let jsig_cf = jsignature_of_type gctx cf.cf_type in
 				let jm = jc#spawn_method cf.cf_name jsig_cf [MPublic] in
-				let tl,tr = match follow cf.cf_type with
-					| TFun(tl,tr) -> tl,tr
+				let tl,tr = match follow_with_coro cf.cf_type with
+					| NotCoro TFun(tl,tr) ->
+						tl,tr
+					| Coro(tl,tr) ->
+						Common.expand_coro_type gctx.gctx.basic tl tr
 					| _ -> die "" __LOC__
 				in
 				let locals = List.map (fun (n,_,t) ->
