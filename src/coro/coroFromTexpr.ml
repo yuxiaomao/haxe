@@ -214,10 +214,22 @@ let expr_to_coro ctx etmp_result etmp_error_unwrapped cb_root e =
 			) cb
 		(* terminators *)
 		| TBreak ->
-			terminate cb (NextBreak (Lazy.force (snd (List.hd !loop_stack)))) e.etype e.epos;
+			begin match !loop_stack with
+				| hd :: _ ->
+					terminate cb (NextBreak (Lazy.force (snd hd))) e.etype e.epos;
+				| [] ->
+					(* Ignore, this failed during typing already. *)
+					()
+			end;
 			None
 		| TContinue ->
-			terminate cb (NextContinue (fst (List.hd !loop_stack))) e.etype e.epos;
+			begin match !loop_stack with
+				| hd :: _ ->
+					terminate cb (NextContinue (fst hd)) e.etype e.epos;
+				| [] ->
+					(* Ignore, this failed during typing already. *)
+					()
+			end;
 			None
 		| TReturn None ->
 			terminate cb NextReturnVoid e.etype e.epos;
