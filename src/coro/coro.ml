@@ -198,6 +198,8 @@ module ContinuationClassBuilder = struct
 			   is to make the mono nullable and use null. *)
 			Monomorph.add_modifier r (MNullable basic.tnull);
 			mk (TConst TNull) t p
+		| TFun _ ->
+			mk (TConst TNull) t p
 		| _ ->
 			if is_nullable t then
 				mk (TConst TNull) t p
