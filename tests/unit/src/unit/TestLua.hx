@@ -115,6 +115,40 @@ class TestLua extends Test {
 		// @:selfCall method should generate callable(5) instead of callable:call(5)
 		eq(callable.call(5), 15);
 	}
+
+	// Issue #10089: Function callbacks passed via anonymous objects should work correctly
+	function testFunctionCallbackInAnonObject() {
+		var result:String = null;
+		var callback = function(arg:String) {
+			result = arg;
+		};
+		var callable = new Issue10089Callable({callback: callback});
+		callable.invoke();
+		eq(result, "Argument String");
+	}
+
+	// Issue #11901: Function from Dynamic object stored in class Var field
+	function testFunctionFromDynamicObject() {
+		var a = new Issue11901Test({
+			test: function(k:Dynamic, v:Dynamic) {
+				return Std.string(k) + "," + Std.string(v);
+			}
+		});
+		eq(a.func("a", 1), "a,1");
+		eq(a.call("b", 2), "b,2");
+	}
+
+	// Issue #7738: Nested function in typedef-based anonymous object
+	function testNestedFunctionInTypedef() {
+		var result:String = null;
+		Issue7738Helper.process({
+			time: 1000,
+			onComplete: function() {
+				result = "completed";
+			}
+		});
+		eq(result, "completed");
+	}
 }
 
 @:multiReturn extern class Multi {
@@ -124,7 +158,7 @@ class TestLua extends Test {
 
 class MultiCall {
 	public static function doit() : Dynamic {
-		return untyped __lua__("1,'hi'");	
+		return untyped __lua__("1,'hi'");
 	}
 	public static function acceptMr(m:Multi){
 		return lua.Lua.type(m) == "table";
@@ -144,4 +178,44 @@ typedef Issue11842Slot = {
 // Issue #9369
 extern class SelfCallable {
 	@:selfCall function call(x:Int):Int;
+}
+
+// Issue #10089
+typedef Issue10089CallableParams = {
+	var callback:String->Void;
+}
+
+class Issue10089Callable {
+	var callback:String->Void;
+	public function new(params:Issue10089CallableParams) {
+		callback = params.callback;
+	}
+	public function invoke() {
+		callback("Argument String");
+	}
+}
+
+// Issue #11901
+class Issue11901Test {
+	public var func:(Dynamic, Dynamic) -> String;
+	public function new(obj:Dynamic) {
+		this.func = obj.test;
+	}
+	public function call(k:Dynamic, v:Dynamic):String {
+		return func(k, v);
+	}
+}
+
+// Issue #7738
+typedef Issue7738Args = {
+	?time:Int,
+	?onComplete:Void->Void
+}
+
+class Issue7738Helper {
+	public static function process(args:Issue7738Args) {
+		if (args.onComplete != null) {
+			args.onComplete();
+		}
+	}
 }
