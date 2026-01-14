@@ -68,7 +68,7 @@ let handle_locals ctx b cls states tf_args forbidden_vars econtinuation =
 				Option.may loop eo
 			| TLocal v when Hashtbl.mem var_usages v.v_id ->
 				let existing = Hashtbl.find var_usages v.v_id in
-				
+
 				Hashtbl.replace var_usages v.v_id (IntSet.add state.cs_id existing)
 			| _ ->
 				Type.iter loop e
@@ -126,7 +126,7 @@ let handle_locals ctx b cls states tf_args forbidden_vars econtinuation =
 
 				Hashtbl.replace fields v.v_id field;
 				Hashtbl.replace state.cs_mapped_local v.v_id v;
-				
+
 				{ e with eexpr = TVar (v, Option.map mapper eo) }
 			| TBinop ((OpAssign | OpAssignOp _) as op, elhs, erhs) ->
 				(match Texpr.skip elhs with
@@ -219,7 +219,6 @@ let block_to_texpr_coroutine ctx cb cont cls params tf_args forbidden_vars exprs
 		let open ContTypes in
 		let esubject = base_continuation_field_on ecororesult cont.state cont.state.cf_type in
 		let esuspended = b#void_block [
-			set_control CoroPending;
 			ereturn;
 		] in
 		let eres = base_continuation_field_on ecororesult cont.result com.basic.tany in

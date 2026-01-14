@@ -60,6 +60,7 @@ abstract class BaseContinuation<T> extends SuspensionResult<T> implements IConti
     function new(completion:IContinuation<Any>, initialLabel:Int) {
         this.completion = completion;
 
+		state      = Pending;
         gotoLabel  = initialLabel;
         error      = null;
         result     = null;
