@@ -193,6 +193,7 @@ class TestLua extends Test {
 		eq(10, count);
 	}
 
+
 	// Issue #12192: Closure inside try-catch inside loop should not inherit loop context
 	function testClosureBreakInTryCatchLoop() {
 		// Test 1: Closure with try-catch inside loop should not generate pcall_break check
