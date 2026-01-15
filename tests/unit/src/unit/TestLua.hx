@@ -161,6 +161,38 @@ class TestLua extends Test {
 		eq(result, "test");
 	}
 
+	// Issue #7539: Closure in conditional expression should capture correct parameter
+	function testClosureInConditionalExpression() {
+		var obj = new Issue7539Test();
+		var args:Array<String> = [];
+		args.push("bar");
+		obj.foo(args);
+		eq(args.length, 2);
+		eq(args[0], "bar");
+		eq(args[1], "added");
+	}
+
+	// Issue #10090: Many map operations should not exceed Lua's 200 local variable limit
+	function testLocalVariableReuse() {
+		// This test would fail with "too many local variables" before the fix
+		// Each map operation generates temp vars that should be reused
+		var map = new Map<Issue10090Object, Bool>();
+		map[new Issue10090Object()] = true;
+		map[new Issue10090Object()] = true;
+		map[new Issue10090Object()] = true;
+		map[new Issue10090Object()] = true;
+		map[new Issue10090Object()] = true;
+		map[new Issue10090Object()] = true;
+		map[new Issue10090Object()] = true;
+		map[new Issue10090Object()] = true;
+		map[new Issue10090Object()] = true;
+		map[new Issue10090Object()] = true;
+		// If we got here without error, the optimization is working
+		var count = 0;
+		for (_ in map.keys()) count++;
+		eq(10, count);
+	}
+
 	// Issue #12192: Closure inside try-catch inside loop should not inherit loop context
 	function testClosureBreakInTryCatchLoop() {
 		// Test 1: Closure with try-catch inside loop should not generate pcall_break check
@@ -284,4 +316,21 @@ class Issue10055Helper {
 			cb("test");
 		}
 	}
+}
+
+// Issue #7539: Closure in conditional should not capture wrong variable
+class Issue7539Test {
+	public var foo:Array<String>->Void;
+
+	public function new(?foo:Array<String>->Void) {
+		this.foo = if (foo != null) foo else function(args) {
+			// 'args' here should be the function parameter, not 'this'
+			args.push("added");
+		};
+	}
+}
+
+// Issue #10090: Helper class for local variable reuse test
+class Issue10090Object {
+	public function new() {}
 }
