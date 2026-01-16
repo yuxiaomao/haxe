@@ -137,10 +137,12 @@ abstract class BaseContinuation<T> extends SuspensionResult<T> implements IConti
 			return;
 		}
 		startedException = true;
+		#if target.threaded
 		if (sys.thread.Thread.main() != sys.thread.Thread.current()) {
 			// This could maybe be handled via a TLS...
 			return;
 		}
+		#end
 
 		var stack = [];
 		var skipping = 0;
