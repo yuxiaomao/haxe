@@ -136,11 +136,16 @@ abstract class BaseContinuation<T> extends SuspensionResult<T> implements IConti
 		if (stackTraceManager == null) {
 			return;
 		}
+		startedException = true;
+		if (sys.thread.Thread.main() != sys.thread.Thread.current()) {
+			// This could maybe be handled via a TLS...
+			return;
+		}
+
 		var stack = [];
 		var skipping = 0;
 		var insertIndex = 0;
 		var stackItem = stackItem;
-		startedException = true;
 
 		/*
 			Find first coro stack element
