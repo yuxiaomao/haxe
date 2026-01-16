@@ -82,7 +82,9 @@ abstract class BaseContinuation<T> extends SuspensionResult<T> implements IConti
         this.error  = error;
 		recursing = false;
 		resumeResult = invokeResume();
-		context.get(Scheduler).scheduleObject(this);
+		if (resumeResult != SuspensionResult.suspended) {
+			context.get(Scheduler).scheduleObject(this);
+		}
     }
 
 	/**
