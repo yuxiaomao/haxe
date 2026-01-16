@@ -132,6 +132,10 @@ abstract class BaseContinuation<T> extends SuspensionResult<T> implements IConti
 		return;
 		#end
 		#if debug
+		final stackTraceManager = context.get(StackTraceManager);
+		if (stackTraceManager == null) {
+			return;
+		}
 		var stack = [];
 		var skipping = 0;
 		var insertIndex = 0;
@@ -174,7 +178,7 @@ abstract class BaseContinuation<T> extends SuspensionResult<T> implements IConti
 				return;
 		}
 		exception.stack = stack;
-		context.get(StackTraceManager).insertIndex = insertIndex;
+		stackTraceManager.insertIndex = insertIndex;
 		#end
 	}
 
@@ -186,7 +190,16 @@ abstract class BaseContinuation<T> extends SuspensionResult<T> implements IConti
 		if (startedException) {
 			return;
 		}
+		#if target.threaded
+		if (sys.thread.Thread.main() != sys.thread.Thread.current()) {
+			// This could maybe be handled via a TLS...
+			return;
+		}
+		#end
 		var stackTraceManager = context.get(StackTraceManager);
+		if (stackTraceManager == null) {
+			return;
+		}
 		// Can happen in the case of ImmediateSuspensionResult.withError
 		if (stackTraceManager.insertIndex == null) {
 			startException(error);
