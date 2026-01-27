@@ -78,11 +78,16 @@ abstract class BaseContinuation<T> extends SuspensionResult<T> implements IConti
 		@see `IContinuation.resume`
 	**/
     public final function resume(result:Any, error:Exception):Void {
-        this.result = result;
-        this.error  = error;
+		this.result = result;
+		this.error = error;
 		recursing = false;
-		resumeResult = invokeResume();
+		// In a threaded environment, we have to assume that `invokeResume` might
+		// go into this `resume` function before we're even done here. We can only
+		// make assumptions about its return value if it's not the `suspended` marker,
+		// because in that case it must be a final state of the coroutine.
+		final resumeResult = invokeResume();
 		if (resumeResult != SuspensionResult.suspended) {
+			this.resumeResult = resumeResult;
 		    context.get(Dispatcher).dispatch(this);
 		}
     }
@@ -228,7 +233,7 @@ abstract class BaseContinuation<T> extends SuspensionResult<T> implements IConti
 	public function onDispatch() {
 		switch (resumeResult.state) {
 			case Pending:
-				return;
+				completion.resume(null, new Exception('Invalid dispatch call on suspended coroutine'));
 			case Returned:
 				completion.resume(resumeResult.result, null);
 			case Thrown:
