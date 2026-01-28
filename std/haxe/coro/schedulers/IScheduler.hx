@@ -15,7 +15,7 @@ interface IScheduler {
 		to a dispatcher instead of executing them directly. In particular, continuations should
 		not be resumed synchronously from the callback code.
 	**/
-	function schedule(ms:Int64, func:() -> Void):ISchedulerHandle;
+	function schedule<T>(ms:Int64, cont:IContinuation<T>):ISchedulerHandle;
 
 	/**
 		Returns the current time in millseconds. The nature of this value is implementation-depdendent
