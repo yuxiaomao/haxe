@@ -12,7 +12,7 @@ private enum E3 {
 	C(str:String);
 }
 
-class Issue12536 extends Test {
+class Issue12538 extends Test {
 	function test() {
 		var map = new haxe.ds.ObjectMap();
 		var a : Dynamic = A;
