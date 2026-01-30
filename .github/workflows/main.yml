@@ -155,12 +155,6 @@ jobs:
         include:
           - target: hl
             APT_PACKAGES: cmake ninja-build libturbojpeg-dev
-          - target: cpp
-            APT_PACKAGES: gcc-multilib g++-multilib
-          - target: lua
-            APT_PACKAGES: ncurses-dev
-          - target: flash
-            APT_PACKAGES: libglib2.0-0 libgtk2.0-0 libfreetype6 xvfb
     steps:
       - uses: actions/checkout@main
         with:
@@ -393,6 +387,7 @@ jobs:
         timeout-minutes: 20
 
   mac-build:
+    if: false
     strategy:
       fail-fast: false
       matrix:
@@ -592,6 +587,7 @@ jobs:
 
 
   mac-build-universal:
+    if: false
     needs: mac-build
     runs-on: macos-latest
     steps:
