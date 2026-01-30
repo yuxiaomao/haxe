@@ -5,3 +5,4 @@ compile-each.hxml
 -D hl-check
 -D hl-ver=1.16.0
 -D hlgen.makefile=ci
+-D UTEST-PRINT-TESTS
