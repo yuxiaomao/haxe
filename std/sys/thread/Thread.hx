@@ -164,9 +164,9 @@ class Thread {
 			}
 			if( exception != null )
 				t.onAbort(exception);
-			@:privateAccess main().events.wakeup();
 			t.onExit();
 			t.dispose();
+			@:privateAccess main().events.wakeup();
 		});
 		if( name != null ) t.name = name;
 		return t;
