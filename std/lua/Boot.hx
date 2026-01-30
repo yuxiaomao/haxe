@@ -292,6 +292,10 @@ class Boot {
 			os = untyped jit.os;
 			os = os.toLowerCase();
 		} else {
+			if (Package.config.charAt(0) == "\\") {
+				return "Windows";
+			}
+
 			var popen_status:Bool = false;
 			var popen_result:lua.FileHandle = null;
 			untyped __lua__("popen_status, popen_result = pcall(_G.io.popen, '')");
