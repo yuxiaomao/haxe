@@ -35,10 +35,26 @@ abstract Context(ElementTree) {
 	}
 
 	/**
-		Creates a new `AdjustableContext` containing the `elements` associations.
+		Returns a copy of `this` context with `elements` added to it, potentially
+		overwriting existing associations.
+	**/
+	public function with(...elements:IElement<Any>):Context {
+		return clone().with(...elements);
+	}
+
+	/**
+		Returns a copy of `this` context where all elements associated with `keys`
+		are unset.
+	**/
+	public function without(...keys:Key<Any>):Context {
+		return clone().without(...keys);
+	}
+
+	/**
+		Creates a new `Context` containing the `elements` associations.
 	**/
 	static public inline function create(...elements:IElement<Any>) {
-		return new AdjustableContext(new ElementTree()).with(...elements);
+		return new Context(new ElementTree()).with(...elements);
 	}
 }
 
