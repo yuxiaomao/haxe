@@ -39,7 +39,7 @@ class Boot {
 
 	public static var platformBigEndian = NativeStringTools.byte(NativeStringTools.dump(function() {}), 7) > 0;
 
-	static var hiddenFields:Table<String, Bool> = untyped __lua__("{__id__=true, hx__closures=true, super=true, prototype=true, __fields__=true, __ifields__=true, __class__=true, __properties__=true}");
+	static var hiddenFields:Table<String, Bool> = Syntax.code("{__id__=true, hx__closures=true, super=true, prototype=true, __fields__=true, __ifields__=true, __class__=true, __properties__=true}");
 
 	static function __unhtml(s:String)
 		return s.split("&").join("&amp;").split("<").join("&lt;").split(">").join("&gt;");
@@ -164,7 +164,7 @@ class Boot {
 				// Shift all numeric keys by -1 to convert from 1-indexed to 0-indexed.
 				// Cannot use table.remove as it doesn't work correctly for sparse tables.
 				var result:Table<Int, T> = Table.create();
-				untyped __lua__("for k, v in pairs(tab) do if type(k) == 'number' then result[k - 1] = v end end");
+				Syntax.code("for k, v in {0}({1}) do if {2}(k) == 'number' then {3}[k - 1] = v end end", Lua.pairs, tab, Lua.type, result);
 				return untyped _hx_tab_array(result, length);
 			} else {
 				return [];
@@ -296,10 +296,9 @@ class Boot {
 				return "Windows";
 			}
 
-			var popen_status:Bool = false;
-			var popen_result:lua.FileHandle = null;
-			untyped __lua__("popen_status, popen_result = pcall(_G.io.popen, '')");
-			if (popen_status) {
+			var result = Lua.pcall(Io.popen, "");
+			var popen_result:lua.FileHandle = result.value;
+			if (result.status) {
 				popen_result.close();
 				os = lua.Io.popen('uname -s', 'r').read('*l').toLowerCase();
 			} else {

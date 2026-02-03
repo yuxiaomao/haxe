@@ -40,10 +40,10 @@ class Math {
 
 	public static var NaN(get, null):Float;
 
-	// Note: this has to be an untyped literal, otherwise the compiler tries
+	// Note: this has to be a raw literal, otherwise the compiler tries
 	// to unify it to an Int, which defeats useful numeric reflection behavior.
 	static inline function get_NaN():Float
-		return untyped __lua__("(0/0)");
+		return lua.Syntax.plainCode("(0/0)");
 
 	public static function isNaN(f:Float):Bool
 		return (f != f);
