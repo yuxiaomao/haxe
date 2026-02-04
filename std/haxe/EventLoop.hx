@@ -1,5 +1,6 @@
 package haxe;
 
+import haxe.ds.IntMap;
 import haxe.EntryPoint;
 
 class Event {
@@ -87,6 +88,12 @@ class EventLoop {
 		it is the same as `main`.
 	**/
 	public static var current(get,never) : EventLoop;
+
+	#if target.threaded
+	static var eventsTls:sys.thread.Tls<EventLoop>;
+	static var threadsToEventLoops:IntMap<EventLoop>;
+	static var threadsToEventLoopsMutex:sys.thread.Mutex;
+	#end
 
 	var events : Event;
 	var queue : Event;
@@ -464,9 +471,24 @@ class EventLoop {
 		#end
 	}
 
+	#if target.threaded
+
+	/**
+		Returns the instance of `EventLoop` associated with `thread`, or `null` if no such
+		instance exists for the given thread.
+	**/
+	static public function getThreadLoop(thread:sys.thread.Thread) {
+		threadsToEventLoopsMutex.acquire();
+		final events = threadsToEventLoops.get(thread.id);
+		threadsToEventLoopsMutex.release();
+		return events;
+	}
+
+	#end
+
 	static function get_current() {
 		#if target.threaded
-		var events = sys.thread.Thread.current().events;
+		var events = eventsTls.value;
 		if( events == null ) throw "The current thread doesn't have an event loop.";
 		return events;
 		#else
@@ -479,5 +501,44 @@ class EventLoop {
 		return main;
 	}
 
+	#if target.threaded
 
+	static function __init__() {
+		eventsTls = new sys.thread.Tls();
+		threadsToEventLoops = new IntMap();
+		threadsToEventLoopsMutex = new sys.thread.Mutex();
+
+		// Set up main EventLoop
+		final mainEvents = main;
+		mainEvents.thread = sys.thread.Thread.main();
+		eventsTls.value = mainEvents;
+		threadsToEventLoopsMutex.acquire(); // probably not necessary but let's play it safe
+		threadsToEventLoops.set(mainEvents.thread.id, mainEvents);
+		threadsToEventLoopsMutex.release();
+
+		// Set up onJobStart
+		sys.thread.Thread.onJobStart(() -> {
+			final thread = sys.thread.Thread.current();
+			final events = new EventLoop();
+			events.thread = thread;
+			eventsTls.value = events;
+			threadsToEventLoopsMutex.acquire();
+			threadsToEventLoops.set(thread.id, events);
+			threadsToEventLoopsMutex.release();
+
+			// Set up onJobDone
+			thread.onJobDone(() -> {
+				events.loop();
+			});
+
+			// Set up onExit
+			thread.onExit(() -> {
+				events.dispose();
+				mainEvents.wakeup();
+				eventsTls.value = null;
+			});
+		});
+	}
+
+	#end
 }

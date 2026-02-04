@@ -31,15 +31,21 @@ class Thread {
 	static var threads : Array<Thread>;
 	static var mutex : Mutex;
 	static var mainThread : Thread;
+	static var idCounter : Int; // TODO: Should probably be an AtomicInt
+	static var onJobStartCallback : Null<() -> Void>;
 
+	@:deprecated("Use haxe.EventLoop.getThreadLoop(thread) instead")
+	public var events(get, null):Null<haxe.EventLoop>;
+
+	inline function get_events() {
+		return haxe.EventLoop.getThreadLoop(this);
+	}
+
+	public final id : Int;
 	var impl : ThreadImpl;
 	var messages : Deque<Dynamic>;
-
-	/**
-		The events loop of this thread.
-		If this is a native thread, the events will be null.
-	**/
-	public var events(default,null) : Null<haxe.EventLoop>;
+	var onExitCallback : Null<() -> Void>;
+	var onJobDoneCallback : Null<() -> Void>;
 
 	/**
 		Tells if we needs to wait for the thread to terminate before we stop the main loop (default:true).
@@ -58,6 +64,7 @@ class Thread {
 	public var isNative(default,null) : Bool;
 
 	function new(impl) {
+		this.id = idCounter++;
 		this.impl = impl;
 		if( impl != null ) this.name = ThreadImpl.getName(impl);
 	}
@@ -92,7 +99,6 @@ class Thread {
 		threads.remove(this);
 		mutex.release();
 		currentTLS.value = null;
-		events.dispose();
 	}
 
 	public static function readMessage( blocking : Bool ) : Null<Dynamic> {
@@ -140,12 +146,10 @@ class Thread {
 	public static function create(?name:String, job:()->Void, ?onExit:() -> Void, ?onAbort:haxe.Exception -> Void):Thread {
 		mutex.acquire();
 		var t = new Thread(null);
-		t.events = new haxe.EventLoop();
-		t.events.thread = t;
 		threads.push(t);
 		mutex.release();
 		if ( onExit != null )
-			t.onExit = onExit;
+			t.onExitCallback = onExit;
 		if( onAbort != null )
 			t.onAbort = onAbort;
 		t.impl = ThreadImpl.create(function() {
@@ -157,16 +161,22 @@ class Thread {
 				#if hl
 				hl.Api.setErrorHandler(null);
 				#end
+				if (onJobStartCallback != null) {
+					onJobStartCallback();
+				}
 				job();
-				t.events.loop();
+				if (t.onJobDoneCallback != null) {
+					t.onJobDoneCallback();
+				}
 			} catch( e ) {
 				exception = e;
 			}
 			if( exception != null )
 				t.onAbort(exception);
-			t.onExit();
+			if (t.onExitCallback != null) {
+				t.onExitCallback();
+			}
 			t.dispose();
-			@:privateAccess main().events.wakeup();
 		});
 		if( name != null ) t.name = name;
 		return t;
@@ -185,8 +195,40 @@ class Thread {
 	}
 
 	/**
+		Registers `f` to be called when a thread is about to start executing its job.
+	**/
+	static public function onJobStart(f:() -> Void) {
+		final onJobStart = onJobStartCallback;
+		onJobStartCallback = function() {
+			f();
+			if (onJobStart != null) {
+				onJobStart();
+			}
+		}
+	}
+
+
+	/**
+		Registers `f` to be called once the thread has completed executing its job
+		successfully. It is not called if the thread has thrown an exception.
+	**/
+	public function onJobDone(f:() -> Void) {
+		final onJobDone = onJobDoneCallback;
+		onJobDoneCallback = function() {
+			f();
+			if (onJobDone != null) {
+				onJobDone();
+			}
+		}
+	}
+
+
+	/**
 		This function is called when an uncaught exception aborted a thread.
 		The error will be printed to stdout but this function can be redefined.
+
+		It is generally good practice to call any previously existing callback
+		from functions assigned to this.
 	**/
 	public dynamic function onAbort(e:haxe.Exception) {
 		var name = this.name;
@@ -195,13 +237,21 @@ class Thread {
 	}
 
 	/**
-		This function is called when the thread is exiting. In the case of an exception, it is called
-		after `onAbort`.
+		Registers `f` to be called when the thread is exiting. In the case of an exception,
+		it is called after `onAbort`.
 
 		It is not guaranteed to be called if the thread is killed in a way that does not lead to
-		normal termination.
+		normal termination. Any callback assigned to this should not throw an exception.
 	**/
-	public dynamic function onExit() {}
+	public function onExit(f:() -> Void) {
+		final onExit = onExitCallback;
+		onExitCallback = function() {
+			f();
+			if (onExit != null) {
+				onExit();
+			}
+		}
+	}
 
 	static function hasBlocking() {
 		// let's check if we have blocking threads running other that our calling thread
@@ -218,10 +268,9 @@ class Thread {
 
 	static function __init__() {
 		mutex = new Mutex();
+		idCounter = 1;
 		mainThread = new Thread(ThreadImpl.current());
 		mainThread.name = "Main";
-		mainThread.events = haxe.EventLoop.main;
-		mainThread.events.thread = mainThread;
 		threads = [mainThread];
 		currentTLS = new Tls();
 		currentTLS.value = mainThread;
