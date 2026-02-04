@@ -6,6 +6,12 @@ typedef ElementTree = Array<Any>;
 	An immutable context, which can be used like a map.
 **/
 abstract Context(ElementTree) {
+
+	/**
+		The empty context.
+	**/
+	static public final empty = Context.create();
+
 	/**
 		Creates a new immutable context containing the values in `tree`.
 	**/
@@ -48,6 +54,22 @@ abstract Context(ElementTree) {
 	**/
 	public function without(...keys:Key<Any>):Context {
 		return clone().without(...keys);
+	}
+
+	/**
+		Returns a new instance of `Context` where all elements from `context` are
+		added to the elements from `this` context, overwriting them if necessary.
+	**/
+	@:op(A + B) function plus(context:Context) {
+		final out = asArray().copy();
+		for (k => v in context.asArray()) {
+			out[k] = v;
+		}
+		return new Context(out);
+	}
+
+	function asArray() {
+		return this;
 	}
 
 	/**
