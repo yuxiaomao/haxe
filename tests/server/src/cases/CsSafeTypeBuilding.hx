@@ -29,7 +29,7 @@ class CsSafeTypeBuilding extends TestCase {
 			.promise(() -> {
 				runHaxeJson(["--cwd", TestCase.rootCwd, "--cwd", testDir], Methods.ResetCache, {});
 
-				async.done();
+				if (!async.timedOut) async.done();
 			});
 	}
 

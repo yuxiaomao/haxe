@@ -82,7 +82,7 @@ class TestCase implements ITest implements ITestCase {
 			.promise(() -> {
 				runHaxeJson(["--cwd", rootCwd, "--cwd", testDir], Methods.ResetCache, {});
 
-				async.done();
+				if (!async.timedOut) async.done();
 			});
 	}
 
