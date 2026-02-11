@@ -52,8 +52,12 @@ class Lua {
 				}
 
 		}
-		runCommand("pipx", ["ensurepath"]);
-		runCommand("pipx", ["install", "hererocks"]);
+		if (commandSucceed("hererocks", ["--version"])) {
+			infoMsg('hererocks has already been installed.');
+		} else {
+			runCommand("pipx", ["ensurepath"]);
+			runCommand("pipx", ["install", "hererocks"]);
+		}
 	}
 
 	static function installLib(lib : String, version : String, ?server :String){
@@ -71,6 +75,16 @@ class Lua {
 			runCommand("luarocks", args);
 		} else {
 			infoMsg('Lua dependency $lib is already installed at version $version');
+		}
+	}
+
+	static function getVersionDefine(hererocksFlag:String) {
+		if (hererocksFlag.startsWith("-l")) {
+			return ["-D", 'lua-ver=${hererocksFlag.substr(2)}'];
+		} else if (hererocksFlag.startsWith("-j")) {
+			return ["-D", "lua-jit"];
+		} else {
+			throw "unknown version";
 		}
 	}
 
@@ -129,8 +143,10 @@ class Lua {
 			installLib("https://raw.githubusercontent.com/HaxeFoundation/hx-lua-simdjson/master/hx-lua-simdjson-scm-1.rockspec", "");
 
 			changeDirectory(unitDir);
-			runCommand("haxe", ["compile-lua.hxml"].concat(args));
-			runCommand("lua", ["bin/unit.lua"]);
+			for (versionFlags in [[], getVersionDefine(lv)]) {
+				runCommand("haxe", ["compile-lua.hxml"].concat(args).concat(versionFlags));
+				runCommand("lua", ["bin/unit.lua"]);
+			}
 
 			Display.maybeRunDisplayTests(Lua);
 
