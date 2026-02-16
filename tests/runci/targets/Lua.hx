@@ -56,7 +56,7 @@ class Lua {
 			infoMsg('hererocks has already been installed.');
 		} else {
 			runCommand("pipx", ["ensurepath"]);
-			runCommand("pipx", ["install", "hererocks"]);
+			runCommand("pipx", ["install", "git+https://github.com/tobil4sk/hererocks.git@fix/windows-msys-shell"]);
 		}
 	}
 
@@ -92,11 +92,13 @@ class Lua {
 
 		getLuaDependencies();
 
-		for (lv in ["-l5.1", "-l5.2", "-l5.3", "-l5.4"].concat(systemName == 'Linux' && Linux.arch == Arm64 ? [] : ["-j2.0", "-j2.1"])) {
-			final envpath = getInstallPath() + '/lua_env/lua$lv';
+		for (lv in ["-l5.1", "-l5.2", "-l5.3", "-l5.4", "-j2.0", "-j@v2.1"]) {
+			// luajit 2.0 was missing arm64 support
+			if (System.arch == Arm64 && lv == "-j2.0") continue;
+
+			final envpath = getInstallPath() + '/lua_env/lua${lv.replace("@v", "")}';
 			addToPATH(envpath + '/bin');
 
-			if (systemName == "Mac" && lv.startsWith("-j")) continue;
 			Sys.println('--------------------');
 			Sys.println('Lua Version: $lv');
 
