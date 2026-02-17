@@ -178,7 +178,7 @@ let expr_to_coro ctx etmp_result etmp_error_unwrapped cb_root scope e =
 			Option.map (fun (cb,e1) -> (cb,{e with eexpr = TEnumIndex e1})) cb
 		| TNew(c,tl,el) ->
 			let cb = ordered_loop cb el in
-			Option.map (fun (cb,e1) -> cb,{e with eexpr = TNew(c,tl,el)}) cb
+			Option.map (fun (cb,el) -> cb,{e with eexpr = TNew(c,tl,el)}) cb
 		(* rewrites & forwards *)
 		| TCast(e1,o) ->
 			let (ret,map) = ret_map_expr ret (fun e1 -> {e with eexpr = TCast(e1,o)}) in
