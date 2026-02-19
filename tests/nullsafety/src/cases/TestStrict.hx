@@ -796,18 +796,18 @@ class TestStrict {
 			var s:String = event; // event should be known to be non-null here
 			event.charAt(0); // this should not fail
 		}
-		
+
 		// Test with null on left side: while (null != (event = arr.pop()))
 		while (null != (event = arr.pop())) {
 			var s:String = event;
 			event.charAt(0);
 		}
-		
+
 		// Test with == null (should be null inside)
 		while ((event = arr.pop()) == null) {
 			shouldFail(event.charAt(0)); // event is null here
 		}
-		
+
 		// Test with null on left: while (null == (event = arr.pop()))
 		while (null == (event = arr.pop())) {
 			shouldFail(event.charAt(0)); // event is null here
@@ -1564,5 +1564,10 @@ class BinopFlow {
 		acceptFunc(function<T>(x:T):T {
 			return x;
 		});
+	}
+
+	static function coroDispatcher_shouldFail() {
+		var dispatcher = haxe.coro.context.Context.create().get(haxe.coro.dispatchers.Dispatcher);
+		shouldFail(dispatcher.scheduler);
 	}
 }
