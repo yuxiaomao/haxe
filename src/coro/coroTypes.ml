@@ -19,7 +19,6 @@ and coro_block_next = coro_block option
 
 and coro_next =
 	| NextUnknown
-	| NextSub of coro_block * coro_block_next
 	| NextReturnVoid
 	| NextReturn of texpr
 	| NextThrow of texpr
@@ -58,8 +57,6 @@ type coro_ctx = {
 	builder : CoroElsewhere.texpr_builder;
 	typer : Typecore.typer;
 	coro_debug : bool;
-	optimize : bool;
-	allow_tco : bool;
 	nothrow : bool;
 	mutable vthis : tvar option;
 	mutable next_block_id : int;
@@ -68,10 +65,6 @@ type coro_ctx = {
 }
 
 type cb_flag =
-	| CbEmptyMarked
-	| CbForwardMarked
-	| CbTcoChecked
-	| CbReindexed
 	| CbGenerated
 	| CbSuspendState
 	| CbResumeState
@@ -80,5 +73,3 @@ type coro_scope = {
 	scope_var : tvar;
 	restricted_suspension : bool;
 }
-
-exception CoroTco of coro_block
