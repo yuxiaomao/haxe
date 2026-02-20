@@ -15,12 +15,15 @@ jobs:
     permissions:
       contents: read
     env:
+      PLATFORM: linux64
       OCAML_VERSION: 5.3.0
       OPAMYES: 1
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install system dependencies
         run: |
@@ -53,3 +56,22 @@ jobs:
           echo "OPAM_SWITCH_PREFIX=$OPAM_SWITCH_PREFIX" >> $GITHUB_ENV
           echo "CAML_LD_LIBRARY_PATH=$CAML_LD_LIBRARY_PATH" >> $GITHUB_ENV
           echo "OCAML_TOPLEVEL_PATH=$OCAML_TOPLEVEL_PATH" >> $GITHUB_ENV
+
+      - uses: ./.github/actions/setup-neko
+
+      - name: Install dependencies
+        run: |
+          set -ex
+          sudo apt-get update -qqy
+          sudo apt-get install -qqy opam libpcre2-dev zlib1g-dev libgtk2.0-dev libmbedtls-dev ninja-build
+
+      - name: Build Haxe
+        run: |
+          set -ex
+          eval $(opam env)
+          opam config exec -- make -s -j`nproc` STATICLINK=1 haxe
+          opam config exec -- make -s haxelib
+          make -s package_unix
+          ls -l out
+          ldd -v ./haxe
+          ldd -v ./haxelib
