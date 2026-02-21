@@ -118,36 +118,83 @@ let expr_to_coro ctx etmp_result etmp_error_unwrapped cb_root scope make_inline_
 		| _ ->
 			false
 	in
-	let map_suspension e =
+	let map_suspension cb ret e =
+		let allow_tco = (match ret with RTailBlock | RTailReturn -> true | _ -> false) && cb.cb_catch = None in
 		let exception Found in
-		let rec remap loop_depth e = match e.eexpr with
-			| TCall(e1,_) when (match follow_with_coro e1.etype with Coro _ -> true | _ -> false) ->
-				raise Found
+		let rec remap can_tco loop_depth e = match e.eexpr with
+			| TCall(e1,el) when (match follow_with_coro e1.etype with Coro _ -> true | _ -> false) ->
+				if can_tco then
+					make_inline_tail_call {
+						cs_fun = e1;
+						cs_args = el;
+						cs_pos = e.epos;
+						cs_result = SusBlock;
+					}
+				else
+					raise Found
 			| TReturn None ->
 				make_inline_return None e.epos
 			| TReturn (Some e1) ->
-				let e1 = remap loop_depth e1 in
-				make_inline_return (Some e1) e.epos
+				(* `return suspensionCall()` — if `e1` is a coro call, delegate to
+				   the TCall arm (which may inline it as a TCO tail call or raise
+				   Found). We must not wrap with make_inline_return in that case,
+				   because make_inline_tail_call already handles the return. *)
+				begin match e1.eexpr with
+				| TCall(efun, _) when (match follow_with_coro efun.etype with Coro _ -> true | _ -> false) ->
+					remap can_tco loop_depth e1
+				| _ ->
+					let e1 = remap false loop_depth e1 in
+					make_inline_return (Some e1) e.epos
+				end
 			| TThrow _ ->
 				(* TODO: too much of a special case for now, let's bail until the rest works *)
 				raise Found
 			| TBreak | TContinue when loop_depth = 0 ->
 				(* Breaking or continuing while we're in block mode means we need to stay in block mode *)
 				raise Found
+			| TBlock [] -> e
+			| TBlock el ->
+				(* Only the last element of a block is in tail position. *)
+				let rec remap_block = function
+					| [] -> []
+					| [last] -> [remap can_tco loop_depth last]
+					| hd :: tl -> remap false loop_depth hd :: remap_block tl
+				in
+				{e with eexpr = TBlock (remap_block el)}
+			| TIf(e1, e2, e3_opt) ->
+				let e1' = remap false loop_depth e1 in
+				let e2' = remap can_tco loop_depth e2 in
+				let e3_opt' = Option.map (remap can_tco loop_depth) e3_opt in
+				{e with eexpr = TIf(e1', e2', e3_opt')}
+			| TSwitch switch ->
+				let switch_subject = remap false loop_depth switch.switch_subject in
+				let switch_cases = List.map (fun case ->
+					{case with case_expr = remap can_tco loop_depth case.case_expr}
+				) switch.switch_cases in
+				let switch_default = Option.map (remap can_tco loop_depth) switch.switch_default in
+				{e with eexpr = TSwitch {switch with switch_subject; switch_cases; switch_default}}
+			| TTry(e1, catches) ->
+				(* The try body has a catch handler (this TTry's), so no TCO there.
+				   The catch bodies don't have a catch handler from this TTry node,
+				   so they inherit can_tco from the outer context. *)
+				let e1 = remap false loop_depth e1 in
+				let catches = List.map (fun (v, e) -> (v, remap can_tco loop_depth e)) catches in
+				{e with eexpr = TTry(e1, catches)}
 			| TWhile(e1,e2,flag) ->
-				let e1 = remap loop_depth e1 in
-				let e2 = remap (loop_depth + 1) e2 in
+				let e1 = remap false loop_depth e1 in
+				let e2 = remap false (loop_depth + 1) e2 in
 				{e with eexpr = TWhile(e1,e2,flag)}
 			| TFunction _ ->
 				e
 			| _ ->
-				Type.map_expr (remap loop_depth) e
+				Type.map_expr (remap false loop_depth) e
 		in
-		try HasNoSuspension (remap 0 e)
+		try HasNoSuspension (remap allow_tco 0 e)
 		with Found -> HasSuspension
 	in
 	let loop_stack = ref [] in
-	let rec loop cb ret e = match e.eexpr with
+	let rec loop cb ret e =
+	match e.eexpr with
 		(* special cases *)
 		| TConst TThis | TBlock [] ->
 			Some (cb,e)
@@ -160,7 +207,7 @@ let expr_to_coro ctx etmp_result etmp_error_unwrapped cb_root scope make_inline_
 		| TBlock [e1] ->
 			loop cb ret e1
 		| TBlock el ->
-			begin match map_suspension e with
+			begin match map_suspension cb ret e with
 			| HasNoSuspension e' ->
 				Some (cb, e')
 			| HasSuspension ->
@@ -214,7 +261,7 @@ let expr_to_coro ctx etmp_result etmp_error_unwrapped cb_root scope make_inline_
 			let cb = loop_assign cb (RLocal v) e2 in
 			Option.map (fun (cb,e2) -> (cb,{e with eexpr = TBinop(OpAssign,e1,e2)})) cb
 		| TBinop((OpBoolOr | OpBoolAnd) as op, e1, e2) ->
-			begin match map_suspension e with
+			begin match map_suspension cb ret e with
 			| HasNoSuspension e' ->
 				Some (cb, e')
 			| HasSuspension ->
@@ -353,7 +400,7 @@ let expr_to_coro ctx etmp_result etmp_error_unwrapped cb_root scope make_inline_
 		| TIf(e1,e2,None) ->
 			let cb = loop cb RValue e1 in
 			Option.map (fun (cb,e1) ->
-				match map_suspension e2 with
+				match map_suspension cb ret e2 with
 				| HasNoSuspension e2' ->
 					add_expr cb {e with eexpr = TIf(e1,e2',None)};
 					cb,e_no_value
@@ -361,7 +408,7 @@ let expr_to_coro ctx etmp_result etmp_error_unwrapped cb_root scope make_inline_
 					split_if_then cb e1 e.etype e.epos e2
 			) cb
 		| TIf(e1,e2,Some e3) ->
-			begin match map_suspension e2, map_suspension e3 with
+			begin match map_suspension cb ret e2, map_suspension cb ret e3 with
 			| HasNoSuspension e2', HasNoSuspension e3' ->
 				let cb = loop cb RValue e1 in
 				Option.map (fun (cb,e1) -> cb,{e with eexpr = TIf(e1,e2',Some e3')}) cb
@@ -374,13 +421,13 @@ let expr_to_coro ctx etmp_result etmp_error_unwrapped cb_root scope make_inline_
 					| [] ->
 						let def_opt = match switch.switch_default with
 							| None -> Some None
-							| Some e -> match map_suspension e with
+							| Some e -> match map_suspension cb ret e with
 								| HasNoSuspension e' -> Some (Some e')
 								| HasSuspension -> None
 						in
 						Option.map (fun def -> (List.rev acc, def)) def_opt
 					| case :: rest ->
-						match map_suspension case.case_expr with
+						match map_suspension cb ret case.case_expr with
 						| HasNoSuspension e' -> aux ({case with case_expr = e'} :: acc) rest
 						| HasSuspension -> None
 				in
@@ -399,7 +446,7 @@ let expr_to_coro ctx etmp_result etmp_error_unwrapped cb_root scope make_inline_
 		| TWhile(e1,e2,flag) when not (is_true_expr e1) ->
 			loop cb ret (Texpr.not_while_true_to_while_true ctx.typer.com.Common.basic e1 e2 flag e.etype e.epos)
 		| TWhile(e1,e2,flag) (* always while(true) *) ->
-			begin match map_suspension e2 with
+			begin match map_suspension cb RBlock e2 with
 			| HasNoSuspension e2' ->
 				add_expr cb {e with eexpr = TWhile(e1,e2',flag)};
 				Some (cb,e_no_value)
@@ -411,13 +458,13 @@ let expr_to_coro ctx etmp_result etmp_error_unwrapped cb_root scope make_inline_
 				let rec aux acc catches = match catches with
 					| [] -> Some (List.rev acc)
 					| (v,e) :: rest ->
-						match map_suspension e with
+						match map_suspension cb RBlock e with
 						| HasNoSuspension e' -> aux ((v,e') :: acc) rest
 						| HasSuspension -> None
 				in
 				aux [] catches
 			in
-			begin match map_suspension e1, map_catches () with
+			begin match map_suspension cb RBlock e1, map_catches () with
 			| HasNoSuspension e1', Some catches' ->
 				Some (cb,{e with eexpr = TTry(e1',catches')})
 			| _ ->

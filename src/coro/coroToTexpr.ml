@@ -434,21 +434,32 @@ let block_to_texpr_coroutine ctx cb cont cls params tf_args forbidden_vars exprs
 
 	let fields_and_decls = handle_locals b cls params states tf_args forbidden_vars econtinuation in
 
-	let ethrow = b#void_block [
-		b#assign etmp_error (get_caught (b#string "Invalid coroutine state" p));
-		b#break p
-	] in
-
-	let switch =
-		let cases = List.map (fun state ->
-			{case_patterns = [b#int state.cs_id p];
-				case_expr = b#void_block state.cs_el;
-			}) states in
-		mk_switch egoto cases (Some ethrow) true
+	let eloop,is_single_state = match states with
+		| [state] ->
+			(* Single state: the coroutine has no internal gotos, so we don't need the
+			   while...switch dispatch machinery.  Any trailing TBreak (e.g. from NextThrow,
+			   which would normally break out of the while...switch to reach the error handler)
+			   is in tail position and can be dropped — the error handler follows naturally. *)
+			let el = match List.rev state.cs_el with
+				| { eexpr = TBreak } :: rest -> List.rev rest
+				| _ -> state.cs_el
+			in
+			b#void_block el,true
+		| _ ->
+			let ethrow = b#void_block [
+				b#assign etmp_error (get_caught (b#string "Invalid coroutine state" p));
+				b#break p
+			] in
+			let switch =
+				let cases = List.map (fun state ->
+					{case_patterns = [b#int state.cs_id p];
+						case_expr = b#void_block state.cs_el;
+					}) states in
+				mk_switch egoto cases (Some ethrow) true
+			in
+			let eswitch = mk (TSwitch switch) com.basic.tvoid p in
+			mk (TWhile (b#bool true p, eswitch, NormalWhile)) com.basic.tvoid p,false
 	in
-	let eswitch = mk (TSwitch switch) com.basic.tvoid p in
-
-	let eloop = mk (TWhile (b#bool true p, eswitch, NormalWhile)) com.basic.tvoid p in
 
 	let etry = if ctx.nothrow then
 		eloop
@@ -517,4 +528,4 @@ let block_to_texpr_coroutine ctx cb cont cls params tf_args forbidden_vars exprs
 		etry
 	in
 
-	eloop, init_state, fields_and_decls
+	eloop, init_state, fields_and_decls, is_single_state
