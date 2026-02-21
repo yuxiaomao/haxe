@@ -181,7 +181,7 @@ module ContinuationClassBuilder = struct
 		field.cf_expr <- Some expr;
 		field.cf_kind <- Method MethNormal;
 
-		if ctx.coro_debug then
+		if ctx.config.debug then
 			s_expr_debug expr |> Printf.printf "%s\n";
 
 		field
@@ -253,7 +253,7 @@ module ContinuationClassBuilder = struct
 		field.cf_expr <- Some expr;
 		field.cf_kind <- Method MethNormal;
 
-		if ctx.coro_debug then
+		if ctx.config.debug then
 			s_expr_debug expr |> Printf.printf "%s\n";
 
 		field
@@ -265,16 +265,32 @@ let create_continuation_class ctx cont coro_class initial_state =
 	TClass.add_field coro_class.cls resume;
 	Option.may (TClass.add_field coro_class.cls) coro_class.captured;
 	coro_class.cls.cl_constructor <- Some ctor;
-	if ctx.coro_debug then
+	if ctx.config.debug then
 		Printer.s_tclass "\t" coro_class.cls |> Printf.printf "%s\n";
 
 	ctx.typer.m.curmod.m_types <- ctx.typer.m.curmod.m_types @ [ TClassDecl coro_class.cls ]
+
+let check_assertions assert_config num_states p =
+	let open CoroConfig in
+	begin match assert_config with
+	| None -> ()
+	| Some assert_config ->
+		(match assert_config.num_states with
+		| None -> ()
+		| Some expected ->
+			if num_states <> expected then
+				Error.raise_typing_error
+					(Printf.sprintf "Expected %d coroutine state(s), got %d" expected num_states) p)
+	end
 
 let coro_to_state_machine ctx coro_class cb_root exprs args vtmp_result vtmp_error vtmp_error_unwrapped vcompletion vcontinuation stack_item_inserter start_exception =
 	let basic = ctx.typer.t in
 	let b = ctx.builder in
 	let cont = coro_class.ContinuationClassBuilder.continuation_api in
-	let eloop, initial_state, fields, is_single_state = CoroToTexpr.block_to_texpr_coroutine ctx cb_root cont coro_class.cls coro_class.outside.param_types args [ vcompletion.v_id; vcontinuation.v_id ] exprs coro_class.name_pos stack_item_inserter start_exception in
+	let eloop, initial_state, fields, num_states = CoroToTexpr.block_to_texpr_coroutine ctx cb_root cont coro_class.cls coro_class.outside.param_types args [ vcompletion.v_id; vcontinuation.v_id ] exprs coro_class.name_pos stack_item_inserter start_exception in
+	let is_single_state = num_states = 1 in
+	(* Check @:coroutine(assert) config *)
+	check_assertions ctx.config.assert_config num_states coro_class.name_pos;
 	(* update cf_type to use inside type parameters *)
 	List.iter (fun cf ->
 		cf.cf_type <- substitute_type_params coro_class.type_param_subst cf.cf_type;
@@ -461,21 +477,20 @@ let fun_to_coro ctx coro_type =
 	   Cpp dies if I try to use coro_class.outside.cls_t here, which might be something
 	   to investigate independently. *)
 	let tf_type = cont.suspension_result coro_class.outside.result_type in
-	if ctx.coro_debug then begin
+	if ctx.config.debug then begin
 		print_endline ("BEFORE:\n" ^ (s_expr_debug expr));
 		CoroDebug.create_dotgraph (DotGraph.get_dump_path (SafeCom.of_com ctx.typer.com) (ctx.typer.c.curclass.cl_path) name) cb_root
 	end;
 	let e = mk (TFunction {tf_args; tf_expr; tf_type}) (TFun (tf_args |> List.map (fun (v, _) -> (v.v_name, false, v.v_type)), tf_type)) tf_expr.epos in
-	if ctx.coro_debug then print_endline ("AFTER:\n" ^ (s_expr_debug e));
+	if ctx.config.debug then print_endline ("AFTER:\n" ^ (s_expr_debug e));
 	e
 
-let create_coro_context typer meta =
+let create_coro_context typer config =
 	let builder = new CoroElsewhere.texpr_builder typer.Typecore.t in
 	let ctx = {
 		builder;
 		typer;
-		coro_debug = Meta.has (Meta.Custom ":coroutine.debug") meta;
-		nothrow = Meta.has (Meta.Custom ":coroutine.nothrow") meta;
+		config;
 		vthis = None;
 		next_block_id = 0;
 		current_catch = None;

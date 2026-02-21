@@ -4,14 +4,37 @@ import haxe.Exception;
 import haxe.coro.IContinuation;
 import haxe.coro.SuspensionResult;
 import haxe.coro.context.Context;
+import utest.Assert;
 
 private class AlwaysSuspending {
 	public static var _stored:Null<IContinuation<Int>> = null;
 
-	@:coroutine @:coroutine.transformed
+	@:coroutine(transformed)
 	public static function suspend(cont:IContinuation<Int>):SuspensionResult<Int> {
 		_stored = cont;
 		return new SuspensionResult<Int>(Pending);
+	}
+}
+
+private class NothrowCoroutines {
+	static function thrower():Void {
+		throw "nothrow error";
+	}
+
+	// Without nothrow: exception is caught by the coroutine wrapper and forwarded
+	// to the continuation via resume(null, error).
+
+	@:coroutine
+	public static function withThrow():Void {
+		thrower();
+	}
+
+	// With nothrow: the outer try/catch wrapper is omitted, so the exception
+	// escapes the coroutine call normally.
+
+	@:coroutine(nothrow)
+	public static function withNothrow():Void {
+		thrower();
 	}
 }
 
@@ -185,5 +208,44 @@ class TestCoroutines extends Test {
 			bc.resume(0, null);
 
 		eq(null, cont.lastError);
+	}
+
+	// Tests that @:coroutine(nothrow) omits the outer try/catch, causing exceptions
+	// to escape normally instead of being forwarded to the continuation.
+	function testCoroutineNothrow() {
+		// Without nothrow: exception is caught and forwarded via cont.resume(null, error).
+		var cont = new TrackingCont<haxe.Unit>();
+		invokeCoroutineVoid(cont, NothrowCoroutines.withThrow);
+		eq(1, cont.resumeCount);
+		f(cont.lastError == null);
+
+		// With nothrow: exception escapes the coroutine call site.
+		Assert.raises(() -> {
+			NothrowCoroutines.withNothrow(new SimpleCont());
+		}, String);
+	}
+
+	// Tests that @:coroutine(nothrow) also works on local functions.
+	function testCoroutineNothrowLocal() {
+		function thrower():Void {
+			throw "nothrow error";
+		}
+
+		// Without nothrow: exception is caught and forwarded via cont.resume(null, error).
+		@:coroutine function withThrow():Void {
+			thrower();
+		}
+		var cont = new TrackingCont<haxe.Unit>();
+		invokeCoroutineVoid(cont, withThrow);
+		eq(1, cont.resumeCount);
+		f(cont.lastError == null);
+
+		// With nothrow: exception escapes the coroutine call site.
+		@:coroutine(nothrow) function withNothrow():Void {
+			thrower();
+		}
+		Assert.raises(() -> {
+			withNothrow(new SimpleCont());
+		}, String);
 	}
 }
