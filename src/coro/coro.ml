@@ -262,7 +262,11 @@ module ContinuationClassBuilder = struct
 		field
 end
 
-let create_continuation_class ctx cont coro_class initial_state invoke_resume_field cf_captured hoisted_args =
+let create_continuation_class ctx cont coro_class initial_state invoke_resume_field gen_mode hoisted_args =
+	let cf_captured = match gen_mode with
+		| GenInline cfo -> cfo
+		| GenThunk cf -> Some cf
+	in
 	let ctor   = ContinuationClassBuilder.mk_ctor ctx cont coro_class initial_state cf_captured hoisted_args in
 	TClass.add_field coro_class.cls invoke_resume_field;
 	Option.may (TClass.add_field coro_class.cls) cf_captured;
@@ -285,7 +289,7 @@ let check_assertions assert_config num_states p =
 					(Printf.sprintf "Expected %d coroutine state(s), got %d" expected num_states) p)
 	end
 
-let coro_to_state_machine ctx coro_class cb_root exprs args vtmp_result vtmp_error vtmp_error_unwrapped vcompletion vcontinuation cf_captured stack_item_inserter start_exception =
+let coro_to_state_machine ctx coro_class cb_root exprs args vtmp_result vtmp_error vtmp_error_unwrapped vcompletion vcontinuation gen_mode stack_item_inserter start_exception =
 	let b = ctx.builder in
 	let cont = coro_class.ContinuationClassBuilder.continuation_api in
 	let eloop, initial_state, fields, num_states = CoroToTexpr.block_to_texpr_coroutine ctx cb_root cont coro_class.cls coro_class.outside.param_types args exprs coro_class.name_pos stack_item_inserter start_exception in
@@ -300,12 +304,14 @@ let coro_to_state_machine ctx coro_class cb_root exprs args vtmp_result vtmp_err
 	let {CoroToTexpr.ecompletion;eresult;_} = exprs in
 	let tret_invoke_resume = cont.suspension_result coro_class.outside.result_type in
 
-	let invoke_resume_field = match cf_captured with
-		| None ->
+	let invoke_resume_field = match gen_mode with
+		| GenInline None ->
 			(* Inline path: embed state machine directly in invokeResume() *)
 			ContinuationClassBuilder.mk_invoke_resume_with_body ctx coro_class
 				vcontinuation vtmp_result vtmp_error vtmp_error_unwrapped eresult eloop
-		| Some cf_captured ->
+		| GenInline (Some cf) ->
+			assert false (* TODO! *)
+		| GenThunk cf_captured ->
 			(* Thunk path: invokeResume() calls the captured thunk closure *)
 			ContinuationClassBuilder.mk_invoke_resume_thunk_call ctx coro_class cf_captured
 	in
@@ -319,12 +325,12 @@ let coro_to_state_machine ctx coro_class cb_root exprs args vtmp_result vtmp_err
 		| Some field -> Some (v, field)
 		| None -> None
 	) args in
-	create_continuation_class ctx cont coro_class initial_state invoke_resume_field cf_captured hoisted_args;
+	create_continuation_class ctx cont coro_class initial_state invoke_resume_field gen_mode hoisted_args;
 
 	let t = coro_class.outside.cls_t in
 
-	begin match cf_captured with
-		| None ->
+	begin match gen_mode with
+		| GenInline _ ->
 			(* Inline path: pass hoisted args directly to the constructor and call invokeResume()
 			   on the result — no intermediate variable, no separate field assignments. *)
 			let ctor_args = ecompletion :: List.map (fun (v, _) -> b#local v coro_class.name_pos) hoisted_args in
@@ -332,7 +338,7 @@ let coro_to_state_machine ctx coro_class cb_root exprs args vtmp_result vtmp_err
 			let invoke_resume_type = TFun([], tret_invoke_resume) in
 			let einvoke = b#instance_field tnew coro_class.ContinuationClassBuilder.cls coro_class.outside.param_types invoke_resume_field invoke_resume_type in
 			b#return (b#call einvoke [] tret_invoke_resume)
-		| Some _ ->
+		| GenThunk _ ->
 			(* Thunk path: build the closure that captures outer locals, allocate the continuation
 			   (passing hoisted args to the constructor), then call invokeResume(). *)
 			let inside_to_outside t =
@@ -409,6 +415,35 @@ let rewrite_super_field_call ctx egthis e =
 	| _ ->
 		e
 
+let make_deferred_api ctx b =
+	let make_deferred build =
+		let v = alloc_var VGenerated "_hx_coro_deferred" t_dynamic null_pos in
+		Hashtbl.add ctx.deferred_exprs v.v_id build;
+		b#call (b#local v v.v_pos) [] t_dynamic
+	in
+
+	(* These refs will be filled in after the continuation API is created (step 4). *)
+	let make_inline_return_impl : (texpr option -> pos -> texpr) option ref = ref None in
+	let make_inline_tail_call_impl : (coro_suspend -> texpr) option ref = ref None in
+
+	let make_inline_return e1_opt pos =
+		make_deferred (fun () ->
+			(Option.get !make_inline_return_impl) e1_opt pos)
+	in
+	let make_inline_tail_call call =
+		make_deferred (fun () ->
+			(Option.get !make_inline_tail_call_impl) call)
+	in
+	let deferred = {
+		make_inline_return;
+		make_inline_tail_call;
+	} in
+	let install api =
+		make_inline_return_impl := Some api.make_inline_return;
+		make_inline_tail_call_impl := Some api.make_inline_tail_call;
+	in
+	deferred,install
+
 let fun_to_coro ctx coro_type =
 	let basic = ctx.typer.t in
 	let b = ctx.builder in
@@ -463,32 +498,10 @@ let fun_to_coro ctx coro_type =
 			None
 	in
 
-	(* 3. Run expr_to_coro to build the CFG and set ctx.captures_this/ctx.has_capture_vars.
-	      make_inline_return and make_inline_tail_call need the continuation API which hasn't
-	      been created yet.  We use a deferred-expression mechanism: each callback stores a
-	      thunk keyed by a fresh TLocal placeholder var.  After the continuation API is ready
-	      the thunks are evaluated and the placeholders in every CFG block are replaced. *)
-	let make_deferred build =
-		let v = alloc_var VGenerated "_hx_coro_deferred" t_dynamic coro_class.name_pos in
-		Hashtbl.add ctx.deferred_exprs v.v_id build;
-		b#call (b#local v v.v_pos) [] t_dynamic
-	in
-
-	(* These refs will be filled in after the continuation API is created (step 4). *)
-	let make_inline_return_impl : (texpr option -> pos -> texpr) option ref = ref None in
-	let make_inline_tail_call_impl : (coro_suspend -> texpr) option ref = ref None in
-
-	let make_inline_return e1_opt pos =
-		make_deferred (fun () ->
-			(Option.get !make_inline_return_impl) e1_opt pos)
-	in
-	let make_inline_tail_call call =
-		make_deferred (fun () ->
-			(Option.get !make_inline_tail_call_impl) call)
-	in
-
+	(* 3. Run expr_to_coro to build the CFG and set ctx.captures_this/ctx.has_capture_vars. *)
+	let deferred,install_deferred = make_deferred_api ctx b in
 	CoroFromTexpr.check_captures ctx args expr;
-	ignore(CoroFromTexpr.expr_to_coro ctx etmp_result etmp_error_unwrapped cb_root scope make_inline_return make_inline_tail_call expr);
+	ignore(CoroFromTexpr.expr_to_coro ctx etmp_result etmp_error_unwrapped cb_root scope deferred expr);
 
 	(* 4. Setup continuation API — now that ctx.captures_this/ctx.has_capture_vars are
 	      fully set we can create the continuation variables with informed types. *)
@@ -496,35 +509,28 @@ let fun_to_coro ctx coro_type =
 	let cont = coro_class.continuation_api in
 
 	(* Determine the generation mode (inline vs. thunk) now that we know whether any
-	   outside variables are captured.  This must be done before creating vcontinuation
-	   because the two paths require different types.
-	   - Inline (cf_captured = None): no captures, state machine is embedded directly in
-	     invokeResume(), which is a method of the continuation class.  vcontinuation is
-	     assigned `this` inside invokeResume(), so it must carry inside type params.
-	   - Thunk (cf_captured = Some _): has captures, invokeResume() calls a thunk closure
-	     created in the outer function.  vcontinuation is declared in that outer scope,
-	     so it carries outside type params. *)
+	   outside variables are captured. *)
 	let tret_invoke_resume_inside = cont.suspension_result coro_class.inside.result_type in
 	let make_captured_field p =
 		mk_field "captured" (TFun([], tret_invoke_resume_inside)) p p
 	in
-	let cf_captured = match coro_class.coro_type with
+	let gen_mode = match coro_class.coro_type with
 		| ClassField (_, field, _, _) when has_class_field_flag field CfStatic ->
-			None
+			GenInline None
 		| ClassField (_,field, _, _) ->
-			Some (make_captured_field field.cf_name_pos)
+			GenThunk (make_captured_field field.cf_name_pos)
 		| LocalFunc _ when not ctx.captures_this && not ctx.has_capture_vars ->
-			None
+			GenInline None
 		| LocalFunc (f,v) ->
-			Some (make_captured_field v.v_pos)
+			GenThunk (make_captured_field v.v_pos)
 	in
 
 	let vcompletion = alloc_var VGenerated "_hx_completion" cont.continuation coro_class.name_pos in
 	let ecompletion = b#local vcompletion coro_class.name_pos in
 
-	let vcontinuation_type = match cf_captured with
-		| None -> coro_class.inside.cls_t
-		| Some _ -> coro_class.outside.cls_t
+	let vcontinuation_type = match gen_mode with
+		| GenInline _ -> coro_class.inside.cls_t
+		| GenThunk _ -> coro_class.outside.cls_t
 	in
 	let vcontinuation = alloc_var VGenerated "_hx_continuation" vcontinuation_type coro_class.name_pos in
 	let econtinuation = b#local vcontinuation coro_class.name_pos in
@@ -573,21 +579,25 @@ let fun_to_coro ctx coro_type =
 
 	(* 5. Fill in the deferred callback implementations now that the continuation API exists *)
 
-	make_inline_return_impl := Some (fun e1_opt pos ->
-		let stmts = [
-			b#assign egoto (b#int (-1) pos);
-			b#assign estate (CoroControl.mk_control basic CoroControl.CoroReturned);
-		] in
-		let stmts = match e1_opt with
-			| None -> stmts
-			| Some e1 -> stmts @ [b#assign eresult e1]
-		in
-		let stmts = stmts @ [b#return econtinuation] in
-		mk (TBlock stmts) t_dynamic pos);
-
-	make_inline_tail_call_impl := Some (fun call ->
-		let (ecallcoroutine, eret) = CoroToTexpr.SuspensionCalls.make_suspending_tail_call ctx cont exprs call in
-		b#void_block [stack_item_inserter call.cs_pos; ecallcoroutine; eret]);
+	let deferred_impl = {
+		make_inline_return = (fun e1_opt pos ->
+			let stmts = [
+				b#assign egoto (b#int (-1) pos);
+				b#assign estate (CoroControl.mk_control basic CoroControl.CoroReturned);
+			] in
+			let stmts = match e1_opt with
+				| None -> stmts
+				| Some e1 -> stmts @ [b#assign eresult e1]
+			in
+			let stmts = stmts @ [b#return econtinuation] in
+			mk (TBlock stmts) t_dynamic pos
+		);
+		make_inline_tail_call =(fun call ->
+			let (ecallcoroutine, eret) = CoroToTexpr.SuspensionCalls.make_suspending_tail_call ctx cont exprs call in
+			b#void_block [stack_item_inserter call.cs_pos; ecallcoroutine; eret]
+		);
+	} in
+	install_deferred deferred_impl;
 
 	(* 6. Transform blocks to state machine *)
 
@@ -598,7 +608,7 @@ let fun_to_coro ctx coro_type =
 			mk (TCall(ef,[e])) basic.tvoid coro_class.name_pos
 		)
 	in
-	let tf_expr = coro_to_state_machine ctx coro_class cb_root exprs args vtmp_result vtmp_error vtmp_error_unwrapped vcompletion vcontinuation cf_captured stack_item_inserter start_exception in
+	let tf_expr = coro_to_state_machine ctx coro_class cb_root exprs args vtmp_result vtmp_error vtmp_error_unwrapped vcompletion vcontinuation gen_mode stack_item_inserter start_exception in
 
 	(* For non-static ClassField: prepend  var _gthis = this  to the thin wrapper so the
 	   thunk (built inside coro_to_state_machine) can capture `_gthis` via closure, making

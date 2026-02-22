@@ -53,6 +53,11 @@ and coro_suspend = {
 	cs_result : suspend_expr;
 }
 
+type coro_deferred_api = {
+	make_inline_return : texpr option -> pos -> texpr;
+	make_inline_tail_call : coro_suspend -> texpr;
+}
+
 type coro_ctx = {
 	builder : CoroElsewhere.texpr_builder;
 	typer : Typecore.typer;
@@ -75,3 +80,7 @@ type coro_scope = {
 	scope_var : tvar;
 	restricted_suspension : bool;
 }
+
+type coro_gen_mode =
+	| GenThunk of tclass_field
+	| GenInline of tclass_field option
