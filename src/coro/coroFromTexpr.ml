@@ -64,7 +64,7 @@ let expr_to_coro ctx etmp_result etmp_error_unwrapped cb_root scope make_inline_
 			OptimizerTexpr.has_side_effect e
 	in
 	let add_expr cb e =
-		if cb.cb_next = NextUnknown && e != e_no_value && has_side_effect e then
+		if cb.cb_next = NextUnknown && e != e_no_value && (has_side_effect e) then
 			DynArray.add cb.cb_el e
 	in
 	let terminate cb kind t p =

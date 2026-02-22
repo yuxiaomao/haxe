@@ -47,16 +47,13 @@ let make_suspending_call basic cont call econtinuation =
 	let args = econtinuation :: call.cs_args in
 	mk (TCall (efun, args)) (cont.suspension_result basic.tany) call.cs_pos
 
-let handle_locals ctx cls params states tf_args forbidden_vars econtinuation =
+let handle_locals ctx cls params states tf_args econtinuation =
 	let b = ctx.builder in
 	let fst_state     = List.hd states in
 	let arg_state_set = IntSet.of_list [ fst_state.cs_id ] in
 
 	(* Keep an extra table of all vars and what states they appear in, easier check if a var is used across states this way. *)
 	let var_usages = tf_args |> List.map (fun (v, _) -> v.v_id, arg_state_set) |> List.to_seq |> Hashtbl.of_seq in
-
-	(* Treat arguments as "declared" in the initial state, this way they aren't spilled if accessed before the first suspension. *)
-	fst_state.cs_declarations <- List.map (fun (a, _) -> a) tf_args;
 
 	List.iter (fun state ->
 		let rec loop e =
@@ -96,15 +93,18 @@ let handle_locals ctx cls params states tf_args forbidden_vars econtinuation =
 			false
 	in
 
-	(* Again, treat function arguments as the special case that they are *)
+	let force_hoisted_ids = Hashtbl.create 0 in
 	List.iter (fun (v, _) ->
-		if is_used_across_multiple_states v.v_id then begin
-			fst_state.cs_writes <- IntSet.add v.v_id fst_state.cs_writes;
-
+		begin
 			let field = mk_field (Printf.sprintf "_hx_hoisted%i" v.v_id) v.v_type null_pos null_pos in
 
 			Hashtbl.replace fields v.v_id field;
-			Hashtbl.replace fst_state.cs_mapped_local v.v_id v;
+			(* Create a fresh restored var rather than reusing the original argument variable.
+			   This prevents the same v_id appearing as both an outer function parameter and
+			   a TVar declaration inside the state machine body (which confuses renameVars). *)
+			let restored_var = alloc_var VGenerated (Printf.sprintf "_hx_restored%i" v.v_id) v.v_type v.v_pos in
+			Hashtbl.replace fst_state.cs_mapped_local v.v_id restored_var;
+			Hashtbl.replace force_hoisted_ids v.v_id ();
 		end) tf_args;
 
 	List.iter (fun state ->
@@ -132,7 +132,7 @@ let handle_locals ctx cls params states tf_args forbidden_vars econtinuation =
 				{ e with eexpr = TVar (v, Option.map mapper eo) }
 			| TBinop ((OpAssign | OpAssignOp _) as op, elhs, erhs) ->
 				(match Texpr.skip elhs with
-				| { eexpr = TLocal v } when is_used_across_multiple_states v.v_id ->
+				| { eexpr = TLocal v } when is_used_across_multiple_states v.v_id || Hashtbl.mem force_hoisted_ids v.v_id ->
 					state.cs_writes <- IntSet.add v.v_id state.cs_writes;
 
 					let new_local = { elhs with eexpr = TLocal (get_or_create_local_mapping v) } in
@@ -143,14 +143,14 @@ let handle_locals ctx cls params states tf_args forbidden_vars econtinuation =
 					Type.map_expr mapper e)
 			| TUnop ((Increment | Decrement) as mode, flag, erhs) ->
 				(match Texpr.skip erhs with
-				| { eexpr = TLocal v  } when is_used_across_multiple_states v.v_id ->
+				| { eexpr = TLocal v  } when is_used_across_multiple_states v.v_id || Hashtbl.mem force_hoisted_ids v.v_id ->
 					state.cs_writes <- IntSet.add v.v_id state.cs_writes;
 
 					let new_rhs = { erhs with eexpr = TLocal (get_or_create_local_mapping v) } in
 					{ e with eexpr = TUnop (mode, flag, new_rhs) }
 				| _ ->
 					Type.map_expr mapper e)
-			| TLocal v when is_used_across_multiple_states v.v_id ->
+			| TLocal v when is_used_across_multiple_states v.v_id || Hashtbl.mem force_hoisted_ids v.v_id ->
 				(* Each state generates new local variables for variables which are used across states. *)
 				(* Here we generate and store those new variables and remap local access to them *)
 
@@ -264,7 +264,7 @@ module SuspensionCalls = struct
 end
 
 
-let block_to_texpr_coroutine ctx cb cont cls params tf_args forbidden_vars exprs p stack_item_inserter start_exception =
+let block_to_texpr_coroutine ctx cb cont cls params tf_args exprs p stack_item_inserter start_exception =
 	let {econtinuation;ecompletion;estate;eresult;egoto;eerror;etmp_result;etmp_error;etmp_error_unwrapped} = exprs in
 	let com = ctx.typer.com in
 	let b = ctx.builder in
@@ -435,7 +435,7 @@ let block_to_texpr_coroutine ctx cb cont cls params tf_args forbidden_vars exprs
 	let states = !states in
 	let states = states |> List.sort (fun state1 state2 -> state1.cs_id - state2.cs_id) in
 
-	let fields_and_decls = handle_locals ctx cls params states tf_args forbidden_vars econtinuation in
+	let fields_and_decls = handle_locals ctx cls params states tf_args econtinuation in
 
 	let eloop = match states with
 		| [state] ->
