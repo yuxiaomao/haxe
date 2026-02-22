@@ -541,7 +541,7 @@ module Printer = struct
 			"t_doc",s_doc t.t_doc;
 			"t_meta",s_metadata t.t_meta;
 			"t_params",s_type_params (tabs ^ "\t") t.t_params;
-			"t_type",s_type_kind t.t_type
+			"t_type",s_type_kind (follow_lazy_and_mono t.t_type);
 		]
 
 	let s_tenum_field tabs ef =
