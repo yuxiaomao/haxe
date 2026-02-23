@@ -155,12 +155,13 @@ abstract class BaseContinuation<T> extends SuspensionResult<T> implements IConti
 		/*
 			Find first coro stack element
 		*/
+		var currentFrame:Null<IStackFrame> = this;
 		while (stackItem == null) {
-			var callerFrame = callerFrame();
-			if (callerFrame == null) {
+			currentFrame = currentFrame.callerFrame();
+			if (currentFrame == null) {
 				break;
 			}
-			stackItem = callerFrame.getStackItem();
+			stackItem = currentFrame.getStackItem();
 		}
 
 		switch (stackItem) {
