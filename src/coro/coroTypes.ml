@@ -67,7 +67,6 @@ type coro_ctx = {
 	deferred_exprs : (int, unit -> texpr) Hashtbl.t;
 	mutable has_capture_vars : bool;
 	mutable captures_this : bool;
-	mutable vthis : tvar option;
 	mutable next_block_id : int;
 	mutable current_catch : coro_block option;
 	mutable has_catch : bool;
@@ -85,4 +84,4 @@ type coro_scope = {
 
 type coro_gen_mode =
 	| GenThunk of tclass_field
-	| GenInline of tclass_field option
+	| GenInline of (texpr * tclass_field) option
