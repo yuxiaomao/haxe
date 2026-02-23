@@ -1,12 +1,12 @@
 package haxe.coro;
 
-import haxe.coro.context.Context;
-import haxe.coro.context.Key;
-import haxe.coro.context.IElement;
-import haxe.coro.dispatchers.Dispatcher;
-import haxe.coro.dispatchers.IDispatchObject;
 import haxe.CallStack.StackItem;
 import haxe.Exception;
+import haxe.coro.context.Context;
+import haxe.coro.context.IElement;
+import haxe.coro.context.Key;
+import haxe.coro.dispatchers.Dispatcher;
+import haxe.coro.dispatchers.IDispatchObject;
 
 class StackTraceManager implements IElement<StackTraceManager> {
 	public static final key = new Key<StackTraceManager>('StackTraceManager');
@@ -157,9 +157,10 @@ abstract class BaseContinuation<T> extends SuspensionResult<T> implements IConti
 		*/
 		while (stackItem == null) {
 			var callerFrame = callerFrame();
-			if (callerFrame != null) {
-				stackItem = callerFrame.getStackItem();
+			if (callerFrame == null) {
+				break;
 			}
+			stackItem = callerFrame.getStackItem();
 		}
 
 		switch (stackItem) {
