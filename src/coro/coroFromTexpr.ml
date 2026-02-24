@@ -18,6 +18,19 @@ type map_suspension_result =
 	| HasSuspension
 	| HasNoSuspension of texpr
 
+(* Extract the @:coroutine outcome config from a callee expression.
+   Handles all field access variants and local variables. *)
+let get_outcome_from_callee e1 =
+	let meta = match (Texpr.skip e1).eexpr with
+		| TField(_, FStatic(_, cf))
+		| TField(_, FInstance(_, _, cf))
+		| TField(_, FClosure(_, cf))
+		| TField(_, FAnon cf) -> cf.cf_meta
+		| TLocal v -> v.v_meta
+		| _ -> []
+	in
+	(CoroConfig.of_meta_list meta).outcome
+
 let check_captures ctx args expr =
 	let vars = Hashtbl.create 16 in
 	let declare v = Hashtbl.add vars v.v_id () in
@@ -156,14 +169,16 @@ let expr_to_coro ctx etmp_result etmp_error_unwrapped cb_root scope deferred e =
 			| TField({eexpr = TConst TSuper},_) ->
 				deferred.make_super_field e
 			| TCall(e1,el) when (match follow_with_coro e1.etype with Coro _ -> true | _ -> false) ->
-				if can_tco then
+				if can_tco then begin
+					let cs_kind = get_outcome_from_callee e1 in
 					deferred.make_inline_tail_call {
 						cs_fun = e1;
 						cs_args = el;
 						cs_pos = e.epos;
 						cs_result = SusBlock;
+						cs_kind;
 					}
-				else
+				end else
 					raise Found
 			| TReturn None ->
 				deferred.make_inline_return None e.epos
@@ -362,36 +377,69 @@ let expr_to_coro ctx etmp_result etmp_error_unwrapped cb_root scope deferred e =
 								end else
 									e
 							) el in
+							let cs_kind = get_outcome_from_callee e1 in
 							let make_next_block () =
 								let cb_next = block_from_e e1 in
 								add_block_flag cb_next CbResumeState;
 								add_block_flag cb CbSuspendState;
 								cb_next
 							in
-							let res,next = match ret with
-							| RValue ->
-								let v = tmp_local cb e.etype None e.epos in
-								let ev = Texpr.Builder.make_local v v.v_pos in
-								let cb_next = make_next_block () in
-								cb_next.cb_stack_value <- Some ev;
-								SusResult,Some(cb_next,ev)
-							| RTailBlock when cb.cb_catch = None ->
-								SusBlock,None
-							| RBlock | RTailBlock ->
-								SusBlock,Some ((make_next_block (),e_no_value))
-							| RTailReturn when cb.cb_catch = None ->
-								SusResult,None
-							| RTerminate _ | RMapExpr _ | RLocal _ | RTailReturn ->
-								SusResult,Some ((make_next_block ()),Lazy.force etmp_result)
-							in
-							let suspend = {
-								cs_fun = e1;
-								cs_args = el;
-								cs_pos = e.epos;
-								cs_result = res;
-							} in
-							terminate cb (NextSuspend(suspend,Option.map fst next)) t_dynamic null_pos;
-							next
+							begin match cs_kind with
+							| { CoroConfig.no_suspend = true } ->
+								(* For a Never-suspending callee in TCO tail position, keep the
+								   existing tail-call optimisation (single-state, no resume block). *)
+								let is_tco = match ret with
+									| RTailBlock | RTailReturn -> cb.cb_catch = None
+									| _ -> false
+								in
+								if is_tco then begin
+									let cs_result = match ret with RTailBlock -> SusBlock | _ -> SusResult in
+									let suspend = { cs_fun = e1; cs_args = el; cs_pos = e.epos; cs_result; cs_kind } in
+									terminate cb (NextSuspend(suspend, None)) t_dynamic null_pos;
+									None
+								end else begin
+									(* Inline path: add the call as a statement in the current block,
+									   no new state is created. *)
+									let needs_result = match ret with RBlock | RTailBlock -> false | _ -> true in
+									let e_opt, ev =
+										if needs_result then
+											let e = Lazy.force etmp_result in
+											(Some e), e
+										else
+											None, e_no_value
+									in
+									let cs_result = if needs_result then SusResult else SusBlock in
+									let suspend = { cs_fun = e1; cs_args = el; cs_pos = e.epos; cs_result; cs_kind } in
+									add_expr cb (deferred.make_sync_call suspend e_opt);
+									Some (cb, ev)
+								end
+							| _ ->
+								let res,next = match ret with
+								| RValue ->
+									let v = tmp_local cb e.etype None e.epos in
+									let ev = Texpr.Builder.make_local v v.v_pos in
+									let cb_next = make_next_block () in
+									cb_next.cb_stack_value <- Some ev;
+									SusResult,Some(cb_next,ev)
+								| RTailBlock when cb.cb_catch = None ->
+									SusBlock,None
+								| RBlock | RTailBlock ->
+									SusBlock,Some ((make_next_block (),e_no_value))
+								| RTailReturn when cb.cb_catch = None ->
+									SusResult,None
+								| RTerminate _ | RMapExpr _ | RLocal _ | RTailReturn ->
+									SusResult,Some ((make_next_block ()),Lazy.force etmp_result)
+								in
+								let suspend = {
+									cs_fun = e1;
+									cs_args = el;
+									cs_pos = e.epos;
+									cs_result = res;
+									cs_kind;
+								} in
+								terminate cb (NextSuspend(suspend,Option.map fst next)) t_dynamic null_pos;
+								next
+							end
 						| _ ->
 							Some(cb,{e with eexpr = TCall(e1,el)})
 						end

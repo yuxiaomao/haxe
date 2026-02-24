@@ -53,7 +53,7 @@ private class NothrowCoroutines {
 		throw "nothrow error";
 	}
 
-	// Without nothrow: exception is caught by the coroutine wrapper and forwarded
+	// Without outcome.noThrow: exception is caught by the coroutine wrapper and forwarded
 	// to the continuation via resume(null, error).
 
 	@:coroutine
@@ -61,10 +61,10 @@ private class NothrowCoroutines {
 		thrower();
 	}
 
-	// With nothrow: the outer try/catch wrapper is omitted, so the exception
+	// With outcome={noThrow}: the outer try/catch wrapper is omitted, so the exception
 	// escapes the coroutine call normally.
 
-	@:coroutine(nothrow)
+	@:coroutine(outcome = {noThrow: true})
 	public static function withNothrow():Void {
 		thrower();
 	}
@@ -160,6 +160,27 @@ function invokeCoroutine<T>(cont:IContinuation<T>, f:haxe.coro.Coroutine<() -> T
 
 function invokeCoroutineVoid(cont:IContinuation<haxe.Unit>, f:haxe.coro.Coroutine<() -> Void>) {
 	f(cont);
+}
+
+// Helper with outcome={noSuspend,noThrow}: always returns 42 immediately without suspending.
+private class NeverReturns42 {
+	@:coroutine(transformed, outcome = {noSuspend: true, noThrow: true})
+	public static function get(cont:IContinuation<Int>):SuspensionResult<Int> {
+		return SuspensionResult.withResult(42);
+	}
+}
+
+// Helper with outcome={noReturn,noThrow}: always suspends; stores the continuation for manual resume.
+private class AlwaysSuspender<T> {
+	public var cont:Null<IContinuation<T>> = null;
+
+	public function new() {}
+
+	@:coroutine(transformed, outcome = {noReturn: true, noThrow: true})
+	public function suspend(cont:IContinuation<T>):SuspensionResult<T> {
+		this.cont = cont;
+		return new SuspensionResult(Pending);
+	}
 }
 
 class TestCoroutines extends Test {
@@ -283,16 +304,16 @@ class TestCoroutines extends Test {
 		eq(null, cont.lastError);
 	}
 
-	// Tests that @:coroutine(nothrow) omits the outer try/catch, causing exceptions
+	// Tests that @:coroutine(outcome = {noThrow: true}) omits the outer try/catch, causing exceptions
 	// to escape normally instead of being forwarded to the continuation.
 	function testCoroutineNothrow() {
-		// Without nothrow: exception is caught and forwarded via cont.resume(null, error).
+		// Without outcome.noThrow: exception is caught and forwarded via cont.resume(null, error).
 		var cont = new TrackingCont<haxe.Unit>();
 		invokeCoroutineVoid(cont, NothrowCoroutines.withThrow);
 		eq(1, cont.resumeCount);
 		f(cont.lastError == null);
 
-		// With nothrow: exception escapes the coroutine call site.
+		// With outcome={noThrow}: exception escapes the coroutine call site.
 		Assert.raises(() -> {
 			NothrowCoroutines.withNothrow(new SimpleCont());
 		}, String);
@@ -371,13 +392,13 @@ class TestCoroutines extends Test {
 		Assert.same(["child-2", "parent-1"], child.log);
 	}
 
-	// Tests that @:coroutine(nothrow) also works on local functions.
+	// Tests that @:coroutine(outcome = {noThrow: true}) also works on local functions.
 	function testCoroutineNothrowLocal() {
 		function thrower():Void {
 			throw "nothrow error";
 		}
 
-		// Without nothrow: exception is caught and forwarded via cont.resume(null, error).
+		// Without outcome.noThrow: exception is caught and forwarded via cont.resume(null, error).
 		@:coroutine function withThrow():Void {
 			thrower();
 		}
@@ -386,8 +407,8 @@ class TestCoroutines extends Test {
 		eq(1, cont.resumeCount);
 		f(cont.lastError == null);
 
-		// With nothrow: exception escapes the coroutine call site.
-		@:coroutine(nothrow) function withNothrow():Void {
+		// With outcome={noThrow}: exception escapes the coroutine call site.
+		@:coroutine(outcome = {noThrow: true}) function withNothrow():Void {
 			thrower();
 		}
 		Assert.raises(() -> {
@@ -515,6 +536,40 @@ class TestCoroutines extends Test {
 		syncPath(cont);
 		eq(1, cont.resumeCount); // resumed synchronously
 		eq("syncPath value", cont.lastResult);
+		eq(null, cont.lastError);
+	}
+
+	// Tests that a coroutine declared with suspends=Never works correctly.
+	// The Never callee returns immediately; the caller should get the result without
+	// creating a real suspension point.
+	function testSuspendsNever() {
+		// This pre-transformed helper always returns 42 immediately.
+		@:coroutine function caller():Int {
+			final v = NeverReturns42.get();
+			return v + 1;
+		}
+		var cont = new TrackingCont<Int>();
+		invokeCoroutine(cont, caller);
+		eq(1, cont.resumeCount);
+		eq(43, cont.lastResult);
+		eq(null, cont.lastError);
+	}
+
+	// Tests that a coroutine declared with suspends=Always suspends the caller.
+	function testSuspendsAlways() {
+		final sus = new AlwaysSuspender<Int>();
+		@:coroutine function caller():Int {
+			final v = sus.suspend();
+			return v + 1;
+		}
+		var cont = new TrackingCont<Int>();
+		invokeCoroutine(cont, caller);
+		// Always-suspending: cont not yet resumed.
+		eq(0, cont.resumeCount);
+		// Manually resume with result 10.
+		sus.cont.resume(10, null);
+		eq(1, cont.resumeCount);
+		eq(11, cont.lastResult);
 		eq(null, cont.lastError);
 	}
 }

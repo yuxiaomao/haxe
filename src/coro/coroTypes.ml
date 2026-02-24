@@ -51,11 +51,13 @@ and coro_suspend = {
 	cs_args : texpr list;
 	cs_pos : pos;
 	cs_result : suspend_expr;
+	cs_kind : CoroConfig.coro_outcome;
 }
 
 type coro_deferred_api = {
 	make_inline_return : texpr option -> pos -> texpr;
 	make_inline_tail_call : coro_suspend -> texpr;
+	make_sync_call : coro_suspend -> texpr option -> texpr;
 	make_this : texpr -> texpr;
 	make_super_field : texpr -> texpr;
 }
