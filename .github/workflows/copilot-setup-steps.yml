@@ -29,7 +29,8 @@ jobs:
         run: |
           set -ex
           sudo apt-get update -qqy
-          sudo apt-get install -qqy opam libpcre2-dev zlib1g-dev libgtk2.0-dev libmbedtls-dev ninja-build
+          sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 install -y \
+            opam libpcre2-dev zlib1g-dev libgtk2.0-dev libmbedtls-dev ninja-build
 
       - name: Cache opam
         id: cache-opam
@@ -66,12 +67,6 @@ jobs:
         run: |
           echo "/usr/local/lib" | sudo tee /etc/ld.so.conf.d/local.conf
           sudo ldconfig
-
-      - name: Install dependencies
-        run: |
-          set -ex
-          sudo apt-get update -qqy
-          sudo apt-get install -qqy opam libpcre2-dev zlib1g-dev libgtk2.0-dev libmbedtls-dev ninja-build
 
       - name: Build Haxe
         run: |
