@@ -404,7 +404,8 @@ let block_to_texpr_coroutine ctx cb cont cls params tf_args exprs p stack_item_i
 			| None ->
 				b#if_then e_if e_then
 			| Some e ->
-				let e_assign = b#assign e (Lazy.force etmp_result) in
+				let etmp_result = {(Lazy.force etmp_result) with epos = e.epos} in
+				let e_assign = b#assign e etmp_result in
 				b#if_then_else e_if e_then e_assign com.basic.tvoid
 	in
 
@@ -455,6 +456,7 @@ let block_to_texpr_coroutine ctx cb cont cls params tf_args exprs p stack_item_i
 			   outer error handler.  In single-state mode there is no loop, so no break
 			   is needed — the error handler follows the body naturally. *)
 			let tail = if single_state then None else Some [ b#break p ] in
+			let etmp_error = {etmp_error with epos = e1.epos } in
 			add_state None ([b#assign etmp_error (get_caught e1); stack_item_inserter e1.epos; b#assign etmp_error (start_exception etmp_error); ]) tail
 		| NextIfThen (econd,cb_then,cb_next) ->
 			let eif = b#if_then_else econd (set_state cb_then.cb_id) (set_state cb_next.cb_id) com.basic.tint in
