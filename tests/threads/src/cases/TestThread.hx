@@ -297,8 +297,8 @@ class TestThread extends utest.Test {
 		final sem = new Semaphore(0);
 		var count = 0;
 
-		final handle1 = Thread.addCallbacks({onStart: () -> count++});
-		final handle2 = Thread.addCallbacks({onStart: () -> { count++; sem.release(); }});
+		final handle1 = Thread.addCallbacks({onStart: () -> { count++; sem.release(); }});
+		final handle2 = Thread.addCallbacks({onStart: () -> count++});
 
 		Thread.create(() -> {}, {onAbort: (_) -> {}});
 		sem.acquire();
