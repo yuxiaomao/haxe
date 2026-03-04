@@ -207,27 +207,23 @@ class Thread {
 				#if hl
 				hl.Api.setErrorHandler(null);
 				#end
-				t.callbacks.callOnStart();
-				globalCallbacks?.callOnStart();
+				ThreadCallbackManager.invokeCallbacks(t.callbacks.onStartCallback, globalCallbacks?.onStartCallback);
 				job();
-				t.callbacks.callOnJobDone();
-				globalCallbacks?.callOnJobDone();
+				ThreadCallbackManager.invokeCallbacks(t.callbacks.onJobDoneCallback, globalCallbacks?.onJobDoneCallback);
 			} catch( e ) {
 				exception = e;
 			}
 
 			if( exception != null ) {
 				try {
-					t.callbacks.callOnAbort(exception);
-					globalCallbacks?.callOnAbort(exception);
+					ThreadCallbackManager.invokeCallbacksArg(t.callbacks.onAbortCallback, globalCallbacks?.onAbortCallback, exception);
 				} catch ( e ) {
 					t.onAbort(e);
 				}
 			}
 
 			try {
-				t.callbacks.callOnExit();
-				globalCallbacks?.callOnExit();
+				ThreadCallbackManager.invokeCallbacks(t.callbacks.onExitCallback, globalCallbacks?.onExitCallback);
 			} catch ( e ) {
 				t.onAbort(e);
 			}
