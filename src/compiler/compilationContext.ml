@@ -80,11 +80,6 @@ type server_api = {
 	cache : CompilationCache.t;
 	callbacks : compilation_callbacks;
 	on_context_create : unit -> int;
-	init_wait_socket : (Ipaddr.V4.t, Ipaddr.V6.t) Ipaddr.v4v6 -> int -> server_accept;
-	init_wait_connect : (Ipaddr.V4.t, Ipaddr.V6.t) Ipaddr.v4v6 -> int -> server_accept;
-	init_wait_stdio : unit -> server_accept;
-	wait_loop : bool -> server_accept -> int;
-	do_connect : (Ipaddr.V4.t, Ipaddr.V6.t) Ipaddr.v4v6 -> int -> string list -> unit;
 }
 
 let message ctx msg =
@@ -106,6 +101,9 @@ let error_ext ctx (err : Error.error) =
 let error ctx ?(depth=0) ?(from_macro = false) msg p =
 	error ctx ~depth ~from_macro msg p;
 	after_error ctx
+
+let has_error ctx =
+	ctx.has_error || ctx.com.Common.has_error
 
 let create_native_lib file extern kind = {
 	lib_file = file;
