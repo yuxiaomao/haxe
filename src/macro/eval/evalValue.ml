@@ -19,86 +19,6 @@
 open Extlib_leftovers
 open Globals
 
-module DomainMutex = struct
-	type t = {
-		dmutex : Mutex.t;
-		downer : int Atomic.t;  (* owner domain_id, or -1 if unlocked *)
-		mutable ddepth : int;   (* reentrant depth, only accessed by owner *)
-	}
-
-	let create () = {
-		dmutex = Mutex.create();
-		downer = Atomic.make (-1);
-		ddepth = 0;
-	}
-
-	let lock mutex domain_id =
-		if Atomic.get mutex.downer = domain_id then
-			mutex.ddepth <- mutex.ddepth + 1
-		else begin
-			Mutex.lock mutex.dmutex;
-			Atomic.set mutex.downer domain_id;
-			mutex.ddepth <- 1
-		end
-
-	let try_lock mutex domain_id =
-		if Atomic.get mutex.downer = domain_id then begin
-			mutex.ddepth <- mutex.ddepth + 1;
-			true
-		end else if Mutex.try_lock mutex.dmutex then begin
-			Atomic.set mutex.downer domain_id;
-			mutex.ddepth <- 1;
-			true
-		end else
-			false
-
-	let unlock mutex =
-		if mutex.ddepth > 1 then
-			mutex.ddepth <- mutex.ddepth - 1
-		else begin
-			Atomic.set mutex.downer (-1);
-			Mutex.unlock mutex.dmutex
-		end
-end
-
-(* Domain-safe lazy: OCaml 5's Lazy.t is not safe to force from multiple domains
-   simultaneously (raises CamlinternalLazy.Undefined). This wraps a thunk with
-   a Mutex so only one domain computes the value; others wait and get the cached result. *)
-module DomainSafeLazy = struct
-	type 'a t = {
-		mutable value : 'a option;
-		f : (unit -> 'a) option ref;
-		mutex : Mutex.t;
-	}
-
-	let make f = {
-		value = None;
-		f = ref (Some f);
-		mutex = Mutex.create ();
-	}
-
-	let force t =
-		match t.value with
-		| Some v -> v
-		| None ->
-			Mutex.lock t.mutex;
-			(* Re-check after acquiring mutex (double-checked locking) *)
-			let result = match t.value with
-			| Some v -> v
-			| None ->
-				let f = match !(t.f) with
-					| Some f -> f
-					| None -> failwith "DomainSafeLazy: internal error - thunk cleared but no value"
-				in
-				let v = f () in
-				t.value <- Some v;
-				t.f := None;
-				v
-			in
-			Mutex.unlock t.mutex;
-			result
-end
-
 type cmp =
 	| CEq
 	| CSup
@@ -190,13 +110,6 @@ type vprototype_kind =
 	| PInstance
 	| PObject
 
-(** Lightweight thread handle used by eval.luv.Thread. Avoids a forward
-    reference to vthread, which is defined in the mutually-recursive value group. *)
-type vluv_thread = {
-	lu_tid : int;
-	mutable lu_domain : unit Domain.t;
-}
-
 type vhandle =
 	| HLoop of Luv.Loop.t
 	| HIdle of Luv.Idle.t
@@ -220,7 +133,7 @@ type vhandle =
 	| HThreadPoolRequest of Luv.Thread_pool.Request.t
 	| HFileModeNumeric of Luv.File.Mode.numeric
 	| HFsEvent of Luv.FS_event.t
-	| HThread of vluv_thread
+	| HThread of Luv.Thread.t
 	| HOnce of Luv.Once.t
 	| HMutex of Luv.Mutex.t
 	| HRwLock of Luv.Rwlock.t
@@ -304,9 +217,7 @@ and vinstance_kind =
 	| IOutChannel of out_channel (* FileOutput *)
 	| ISocket of Unix.file_descr
 	| IThread of vthread
-	| IMutex of DomainMutex.t
-	| ISemaphore of Semaphore.Counting.t
-	| ICondition of vcondition
+	| IMutex of vmutex
 	| ILock of vlock
 	| ITls of int
 	| IDeque of vdeque
@@ -353,8 +264,7 @@ and venum_value = {
 }
 
 and vthread = {
-	tid : int;
-	mutable tthread : unit Domain.t;
+	mutable tthread : Thread.t;
 	tdeque : vdeque;
 	mutable tevents : value;
 	mutable tstorage : value IntMap.t;
@@ -363,16 +273,15 @@ and vthread = {
 and vdeque = {
 	mutable dvalues : value list;
 	dmutex : Mutex.t;
-	dcond : Condition.t;
+}
+
+and vmutex = {
+	mmutex : Mutex.t;
+	mutable mowner : (int * int) option; (* thread ID * same thread lock count *)
 }
 
 and vlock = {
 	ldeque : vdeque;
-}
-
-and vcondition = {
-	cond : Condition.t;
-	cmutex : Mutex.t;
 }
 
 let same_handle h1 h2 =
@@ -399,7 +308,7 @@ let same_handle h1 h2 =
 	| HThreadPoolRequest h1, HThreadPoolRequest h2 -> h1 == h2
 	| HFileModeNumeric h1, HFileModeNumeric h2 -> h1 == h2
 	| HFsEvent h1, HFsEvent h2 -> h1 == h2
-	| HThread h1, HThread h2 -> h1.lu_tid = h2.lu_tid
+	| HThread h1, HThread h2 -> Luv.Thread.equal h1 h2
 	| HOnce h1, HOnce h2 -> h1 == h2
 	| HMutex h1, HMutex h2 -> h1 == h2
 	| HRwLock h1, HRwLock h2 -> h1 == h2

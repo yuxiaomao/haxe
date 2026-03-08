@@ -5,39 +5,64 @@ open EvalExceptions
 open EvalValue
 
 module Deque = struct
-	let create _ = {
+	let create () = {
 		dvalues = [];
 		dmutex = Mutex.create();
-		dcond = Condition.create();
 	}
 
 	let add this i =
 		Mutex.lock this.dmutex;
 		this.dvalues <- this.dvalues @ [i];
-		Condition.signal this.dcond;
 		Mutex.unlock this.dmutex
 
 	let pop this blocking =
-		Mutex.lock this.dmutex;
-		if blocking then begin
-			while this.dvalues = [] do
-				Condition.wait this.dcond this.dmutex
-			done
-		end;
-		let result = match this.dvalues with
+		if not blocking then begin
+			Mutex.lock this.dmutex;
+			match this.dvalues with
 			| v :: vl ->
 				this.dvalues <- vl;
+				Mutex.unlock this.dmutex;
 				Some v
 			| [] ->
+				Mutex.unlock this.dmutex;
 				None
-		in
-		Mutex.unlock this.dmutex;
-		result
+		end else begin
+			(* Optimistic first attempt with immediate lock. *)
+			Mutex.lock this.dmutex;
+			begin match this.dvalues with
+			| v :: vl ->
+				this.dvalues <- vl;
+				Mutex.unlock this.dmutex;
+				Some v
+			| [] ->
+				Mutex.unlock this.dmutex;
+				(* First attempt failed, let's be pessimistic now to avoid locks. *)
+				let rec loop () =
+					Thread.yield();
+					match this.dvalues with
+					| v :: vl ->
+						(* Only lock if there's a chance to have a value. This avoids high amounts of unneeded locking. *)
+						Mutex.lock this.dmutex;
+						(* We have to check again because the value could be gone by now. *)
+						begin match this.dvalues with
+						| v :: vl ->
+							this.dvalues <- vl;
+							Mutex.unlock this.dmutex;
+							Some v
+						| [] ->
+							Mutex.unlock this.dmutex;
+							loop()
+						end
+					| [] ->
+						loop()
+				in
+				loop()
+			end
+		end
 
 	let push this i =
 		Mutex.lock this.dmutex;
 		this.dvalues <- i :: this.dvalues;
-		Condition.signal this.dcond;
 		Mutex.unlock this.dmutex
 end
 
@@ -54,7 +79,7 @@ let create_eval thread = {
 }
 
 let run ctx f thread =
-	let id = thread.tid in
+	let id = Thread.id (Thread.self()) in
 	let maybe_send_thread_event reason = match ctx.debug.debug_socket with
 		| Some socket ->
 			socket.connection.send_thread_event id reason
@@ -63,7 +88,7 @@ let run ctx f thread =
 	in
 	let new_eval = create_eval thread in
 	ThreadSafeHashtbl.add ctx.evals id new_eval;
-	Domain.DLS.set ctx.eval new_eval;
+	Thread_local_storage.set ctx.eval new_eval;
 	let close () =
 		ThreadSafeHashtbl.remove ctx.evals id;
 		maybe_send_thread_event "exited";
@@ -85,15 +110,13 @@ let run ctx f thread =
 		raise exc
 
 let spawn ctx f =
-	let id = Atomic.fetch_and_add ctx.next_thread_id 1 + 1 in
 	let thread = {
-		tid = id;
 		tthread = Obj.magic ();
 		tstorage = IntMap.empty;
 		tevents = vnull;
-		tdeque = Deque.create id;
+		tdeque = Deque.create();
 	} in
-	thread.tthread <- Domain.spawn (fun () -> run ctx f thread);
+	thread.tthread <- Thread.create (run ctx f) thread;
 	thread
 
 (**
@@ -101,16 +124,16 @@ let spawn ctx f =
 	Otherwise creates Haxe thread data structures, runs `f` and then cleans up
 	created data.
 *)
-(* let run ctx f =
+let run ctx f =
 	let id = Thread.id (Thread.self()) in
 	if ThreadSafeHashtbl.mem ctx.evals id then
 		ignore(f())
 	else begin
 		let thread = {
-			tthread = Domain.self();
+			tthread = Thread.self();
 			tstorage = IntMap.empty;
 			tevents = vnull;
 			tdeque = Deque.create();
 		} in
 		run ctx f thread
-	end *)
+	end

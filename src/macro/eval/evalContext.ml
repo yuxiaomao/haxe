@@ -281,13 +281,12 @@ and context = {
 	mutable vector_prototype : vprototype;
 	mutable instance_prototypes : vprototype IntMap.t;
 	mutable static_prototypes : static_prototypes;
-	mutable constructors : value DomainSafeLazy.t IntMap.t;
+	mutable constructors : value Lazy.t IntMap.t;
 	file_keys : Common.file_keys;
 	get_object_prototype : 'a . context -> (int * 'a) list -> vprototype * (int * 'a) list;
 	(* eval *)
-	mutable next_thread_id : int Atomic.t;
 	toplevel : value;
-	eval : eval Domain.DLS.key;
+	eval : eval Thread_local_storage.t;
 	evals : (int,eval) ThreadSafeHashtbl.t;
 	max_stack_depth : int;
 	max_print_depth : int;
@@ -322,13 +321,7 @@ let s_debug_state = function
 (* Misc *)
 
 let get_eval ctx =
-	Domain.DLS.get ctx.eval
-
-let get_domain_id ctx =
-	(get_eval ctx).thread.tid
-
-let current_domain_id () =
-	get_domain_id (get_ctx())
+	Thread_local_storage.get_exn ctx.eval
 
 let kind_name eval kind =
 	let rec loop kind env = match kind with
