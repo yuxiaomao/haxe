@@ -35,7 +35,7 @@ class Hl {
 			return;
 		}
 		if (!FileSystem.exists(hlSrc))
-			runCommand("git", ["clone", "https://github.com/HaxeFoundation/hashlink.git", hlSrc]);
+			runCommand("git", ["clone", "https://github.com/tobil4sk/hashlink.git", hlSrc, "--branch", "debug-gc"]);
 		else
 			infoMsg("Reusing hashlink repository");
 
@@ -64,6 +64,7 @@ class Hl {
 			"-DWITH_UV=OFF",
 			"-DWITH_VIDEO=OFF",
 			"-DCMAKE_INSTALL_PREFIX=" + hlInstallDir,
+			"-DCMAKE_BUILD_TYPE=Debug",
 			"-B" + hlBuild,
 			"-H" + hlSrc
 		]));
@@ -77,6 +78,7 @@ class Hl {
 		if (withJitTests) {
 			runCommand(hlBinary, ["--version"]);
 		}
+		runCommand('file', ['$hlInstallBinDir/hl']);
 
 		haxelibDev("hashlink", '$hlSrc/other/haxelib/');
 
@@ -106,9 +108,13 @@ class Hl {
 			'$hlInstallLibDir/ssl.hdll',
 			'$hlInstallLibDir/sqlite.hdll',
 			"-lm",
-			"-lhl"
+			"-lhl",
+			"-g"
 		].concat(extraCompilerFlags));
 
+		runCommand('file', ['$dir/$filename.exe']);
+		// runCommand('gdb', ["-ex", "run", "-ex", "bt", "-q", "--batch", '$dir/$filename.exe']);
+		run('valgrind', ['$dir/$filename.exe']);
 		run('$dir/$filename.exe', []);
 
 		// Run with MSBuild

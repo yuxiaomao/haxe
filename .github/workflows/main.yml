@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   windows64-build:
+    if: false
     runs-on: windows-latest
     env:
       PLATFORM: windows64
@@ -156,23 +157,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [macro, js, hl, cpp, jvm, php, python, lua, flash, neko]
+        # target: [macro, js, hl, cpp, jvm, php, python, lua, flash, neko]
+        target: [hl]
         arch: [x86, arm64]
         include:
           - target: hl
             arch: x86
-            APT_PACKAGES: cmake ninja-build libturbojpeg-dev
+            APT_PACKAGES: cmake ninja-build libturbojpeg-dev gdb valgrind
           - target: hl
             arch: arm64
-            APT_PACKAGES: cmake ninja-build libturbojpeg-dev
+            APT_PACKAGES: cmake ninja-build libturbojpeg-dev gdb valgrind
             runci-args: --skip-hl-jit
-          - target: cpp
-            arch: x86
-            APT_PACKAGES: gcc-multilib g++-multilib
-          - target: lua
-            APT_PACKAGES: ncurses-dev
-          - target: flash
-            APT_PACKAGES: libglib2.0-0 libgtk2.0-0 libfreetype6 xvfb
+          # - target: cpp
+          #   arch: x86
+          #   APT_PACKAGES: gcc-multilib g++-multilib
+          # - target: lua
+          #   APT_PACKAGES: ncurses-dev
+          # - target: flash
+          #   APT_PACKAGES: libglib2.0-0 libgtk2.0-0 libfreetype6 xvfb
         exclude:
           - target: flash
             arch: arm64
@@ -219,10 +221,25 @@ jobs:
         if: matrix.target == 'flash'
         run: export DISPLAY=:99.0
 
+      - name: Setup Core Dumps
+        run: sudo sysctl -w kernel.core_pattern=core.%p.%e
+
       - name: Test
-        run: haxe -D include_legacy --run RunCi ${{ matrix.target }} ${{ matrix.runci-args }}
+        run: |
+          ulimit -c unlimited
+          haxe -D include_legacy --run RunCi ${{ matrix.target }} ${{ matrix.runci-args }}
         working-directory: ${{github.workspace}}/tests
         timeout-minutes: 20
+
+      - name: Upload debug artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hlc-debug-${{ matrix.arch }}
+          path: |
+            tests/unit/bin/hlc/unit.exe
+            tests/unit/core.*
+            /home/runner/haxe-ci/downloads/hashlink_build
 
   test-docgen:
     needs: linux-build
@@ -287,6 +304,7 @@ jobs:
         working-directory: ${{github.workspace}}/tests/docgen
 
   mac-build:
+    if: false
     strategy:
       fail-fast: false
       matrix:
