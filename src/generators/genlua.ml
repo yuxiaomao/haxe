@@ -555,7 +555,12 @@ and gen_call ctx e el =
              let el =
                 if (match ef with FAnon _ | FDynamic _ -> true | _ -> false) && is_possible_string_field field_owner s then
                     begin
-                        gen_expr ctx e;
+                        add_feature ctx "use._hx_wrap_if_string_field";
+                        add_feature ctx "use.string";
+                        spr ctx "_hx_wrap_if_string_field(";
+                        gen_value ctx field_owner;
+                        print ctx ",'%s'" s;
+                        spr ctx ")";
                         field_owner :: el
                     end
                 else
@@ -652,8 +657,14 @@ and gen_loop ctx cond do_while e =
 
 
 and is_possible_string_field e field_name=
-    (* Special case for String fields *)
-    let structural_type = is_structural_type e.etype in
+    (* Special case for String fields — only for truly structural types,
+       not statics tables (which are TAnon but never strings) *)
+    let structural_type = match follow e.etype with
+        | TAnon a -> (match !(a.a_status) with
+            | ClassStatics _ | EnumStatics _ | AbstractStatics _ -> false
+            | _ -> true)
+        | _ -> is_structural_type e.etype
+    in
     if not structural_type then
         false
     else match field_name with
@@ -776,17 +787,30 @@ and gen_expr ?(local=true) ctx e = begin
         gen_tbinop ctx op e1 e2;
     | TField (x,FClosure (_,f)) ->
         add_feature ctx "use._hx_bind";
+        let fname = if Meta.has Meta.SelfCall f.cf_meta then "" else (field f.cf_name) in
+        if is_string_expr x then begin
+            add_feature ctx "use.string";
+            (match x.eexpr with
+             | TConst _ | TLocal _ ->
+                 print ctx "_hx_bind(";
+                 gen_value ctx x;
+                 print ctx ",String.prototype%s)" fname
+             | _ ->
+                 print ctx "(function() local __=";
+                 gen_value ctx x;
+                 print ctx "; return _hx_bind(__,String.prototype%s) end)()" fname)
+        end else
         (match x.eexpr with
          | TConst _ | TLocal _ ->
              print ctx "_hx_bind(";
              gen_value ctx x;
              print ctx ",";
              gen_value ctx x;
-             print ctx "%s)" (if Meta.has Meta.SelfCall f.cf_meta then "" else (field f.cf_name))
+             print ctx "%s)" fname
          | _ ->
              print ctx "(function() local __=";
              gen_value ctx x;
-             print ctx "; return _hx_bind(__,__%s) end)()" (if Meta.has Meta.SelfCall f.cf_meta then "" else (field f.cf_name)))
+             print ctx "; return _hx_bind(__,__%s) end)()" fname)
     | TEnumParameter (x,_,i) ->
         gen_value ctx x;
         print ctx "[%i]" (i + 2)
@@ -803,9 +827,10 @@ and gen_expr ?(local=true) ctx e = begin
             spr ctx ", nil, nil, true)";
         )
     | TField (e, ef) when is_possible_string_field e (field_name ef)  ->
-        add_feature ctx "use._hx_wrap_if_string_field";
+        add_feature ctx "use._hx_wrap_if_string_field_closure";
+        add_feature ctx "use._hx_bind";
         add_feature ctx "use.string";
-        spr ctx "_hx_wrap_if_string_field(";
+        spr ctx "_hx_wrap_if_string_field_closure(";
         gen_value ctx e;
         print ctx ",'%s')" (field_name ef)
     | TField (x, (FInstance(_,_,f) | FStatic(_,f) | FAnon(f))) when Meta.has Meta.SelfCall f.cf_meta ->
@@ -2227,6 +2252,7 @@ let generate com =
         "use._hx_box_mr", "lua/_lua/_hx_box_mr.lua";
         "use._hx_table", "lua/_lua/_hx_table.lua";
         "use._hx_wrap_if_string_field", "lua/_lua/_hx_wrap_if_string_field.lua";
+        "use._hx_wrap_if_string_field_closure", "lua/_lua/_hx_wrap_if_string_field_closure.lua";
         "use._hx_dyn_add", "lua/_lua/_hx_dyn_add.lua";
     ];
 
