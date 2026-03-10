@@ -64,7 +64,7 @@ module Connect = struct
 				prerr_endline line;
 		in
 		PipeThings.poll sock print;
-		if !has_error then exit 1 else exit 0
+		if !has_error then 1 else 0
 end
 
 module SocketRequest = struct
@@ -285,9 +285,6 @@ end
 let setup_server_context verbose =
 	if verbose then ServerMessage.enable_all ();
 	Sys.catch_break false; (* Sys can never catch a break *)
-	(* Ignore SIGPIPE to prevent process termination when stdin pipe is closed.
-	   Sys.sigpipe may not map to the real signal number, so use 13 directly. *)
-	(try Sys.set_signal 13 Sys.Signal_ignore with _ -> ());
 	(* Create server context and set up hooks for parsing and typing *)
 	let sctx = ServerCompilationContext.create verbose in
 	ServerCache.enable_cache_mode sctx;
@@ -315,7 +312,7 @@ let wait_loop entry verbose accept =
 						None,s
 				in
 				let data = Helper.parse_hxml_data hxml in
-				let parsed_args = Args.parse_args sctx data in
+				let parsed_args = Args.parse_args data in
 				let comm () = ServerCommunication.Communication.create_pipe sctx conn in
 				RequestQueue.add rq parsed_args stdin comm;
 			with Unix.Unix_error _ ->
