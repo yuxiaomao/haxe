@@ -63,12 +63,6 @@ module Communication = struct
 				flush stdout;
 			);
 			close = (fun () -> ());
-			exit = (fun timer_ctx code ->
-				if code = 0 then begin
-					if timer_ctx.measure_times = Yes then Timer.report_times timer_ctx (fun s -> self.write_err (s ^ "\n"));
-				end;
-				exit code;
-			);
 			is_server = false;
 			stdin = None;
 		} in
@@ -85,9 +79,6 @@ module Communication = struct
 			flush = flush_context sctx;
 			close = (fun () ->
 				conn.close()
-			);
-			exit = (fun timer_ctx i ->
-				()
 			);
 			is_server = true;
 			stdin = conn.get_stdin();
