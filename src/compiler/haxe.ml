@@ -43,6 +43,26 @@
 *)
 open Server
 open ParsedArg
+open Ipaddr
+
+let bad_arg msg =
+	prerr_endline msg;
+	exit 1
+
+let parse_host_port hp =
+	match (Ipaddr.with_port_of_string ~default:(-1) hp) with
+	(* Short ipv6 notation will be mixed up with port; extract port and rebuild ipv6 *)
+	| Ok (V6 ip, -1) ->
+		let octets = ExtLib.String.split_on_char ':' (V6.to_string ip) in
+		(match (List.rev octets) with
+			| port :: octets -> (try V6 (V6.of_string_exn (ExtLib.String.join ":" (List.rev octets))), int_of_string port with _ -> bad_arg "Invalid host/port")
+			| _ -> bad_arg "Invalid host/port"
+		)
+	| Ok (_, -1) -> bad_arg "Invalid host/port: missing port"
+	| Ok (ip, port) -> ip, port
+	(* Default to 127.0.0.1 with given port if no host is provided *)
+	| Error _ when Str.string_match (Str.regexp "[0-9]+$") hp 0 -> V4 (V4.of_string_exn "127.0.0.1"), int_of_string hp
+	| Error _ -> bad_arg "Invalid host/port"
 
 ;;
 Sys.catch_break true;
@@ -65,14 +85,15 @@ set_binary_mode_out stderr true;
 
 let parsed_args = Args.parse_args args in
 let curdir = Unix.getcwd () in
-let request_args = Args.expand_args parsed_args in
+let request_args = try Args.expand_args parsed_args with Arg.Bad msg -> bad_arg msg in
+
 Unix.chdir curdir;
 
 (* Are we a client? *)
 
 begin match request_args.connect_arg with
 	| Some hp ->
-		let host, port = Helper.parse_host_port hp in
+		let host, port = parse_host_port hp in
 		(* Pass the entire args again, the server can take that apart. *)
 		let code = Server.Connect.do_connect host port parsed_args in
 		exit code
@@ -94,13 +115,13 @@ in
 begin match request_args.server_mode with
 	| SMListen hp ->
 		let accept =
-			let host, port = Helper.parse_host_port hp in
+			let host, port = parse_host_port hp in
 			Server.init_wait_socket host port
 		in
 		let code = Server.wait_loop entry (is_verbose()) accept in
 		exit code
 	| SMConnect hp ->
-		let host, port = Helper.parse_host_port hp in
+		let host, port = parse_host_port hp in
 		let accept = Server.init_wait_connect host port in
 		let code = Server.wait_loop entry (is_verbose()) accept in
 		exit code
