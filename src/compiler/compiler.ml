@@ -488,12 +488,10 @@ let catch_completion_and_exit ctx sctx run =
 		if ctx.has_error then 1 else 0
 	with
 		| DisplayProcessingGlobals.Completion str ->
-			ServerCache.after_compilation sctx ctx;
 			emit_completion ctx str;
 			finalize ctx;
 			0
 		| DisplayJson.JsonCompleted ->
-			ServerCache.after_compilation sctx ctx;
 			finalize ctx;
 			0
 		| EvalTypes.Sys_exit i | Hlinterp.Sys_exit i ->
@@ -523,7 +521,6 @@ let compile_ctx sctx ctx =
 			compile ctx actx sctx;
 		);
 		ctx.comm.flush ctx;
-		ServerCache.after_compilation sctx ctx;
 		finalize ctx;
 	in
 	if ctx.has_error then begin
