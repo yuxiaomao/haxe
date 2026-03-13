@@ -2130,6 +2130,7 @@ let generate com =
 
     if has_feature ctx "Class" || has_feature ctx "Type.getClassName" then add_feature ctx "lua.Boot.isClass";
     if has_feature ctx "Enum" || has_feature ctx "Type.getEnumName" then add_feature ctx "lua.Boot.isEnum";
+    if has_feature ctx "lua.Lib.getModuleVarargs" then add_feature ctx "use._hx_module_varargs";
 
     let print_file path =
         let file_content = Std.input_file ~bin:true path in
@@ -2290,6 +2291,7 @@ let generate com =
         "use._hx_wrap_if_string_field", "lua/_lua/_hx_wrap_if_string_field.lua";
         "use._hx_wrap_if_string_field_closure", "lua/_lua/_hx_wrap_if_string_field_closure.lua";
         "use._hx_dyn_add", "lua/_lua/_hx_dyn_add.lua";
+        "use._hx_module_varargs", "lua/_lua/_hx_module_varargs.lua";
     ];
 
     print_file (find_file "lua/_lua/_hx_handle_error.lua");
