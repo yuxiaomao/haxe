@@ -6,6 +6,7 @@ import haxe.display.Display;
 import haxe.display.FsPath;
 import haxe.display.Server;
 import haxe.io.Path;
+import TestCase;
 import utest.Assert;
 
 using StringTools;
@@ -65,6 +66,18 @@ class ServerTests extends TestCase {
 		runHaxeJson([], ServerMethods.Invalidate, {file: new FsPath("MacroMain.hx")});
 		runHaxe(args);
 		assertHasPrint("2");
+	}
+
+	function testMacroArgsPerRequest() {
+		vfs.putContent("ArgsMain.hx", getTemplate("ArgsMain.hx"));
+		vfs.putContent("ArgsMacro.hx", getTemplate("ArgsMacro.hx"));
+		var baseArgs = ["-main", "ArgsMain.hx", "--no-output", "-js", "no.js", "--macro", "ArgsMacro.test()"];
+
+		runHaxe(["-D", "arg_marker=first"].concat(baseArgs));
+		assertHasPrint("arg_marker=first");
+
+		runHaxe(["-D", "arg_marker=second"].concat(baseArgs));
+		assertHasPrint("arg_marker=second");
 	}
 
 	// function testDceEmpty() {
@@ -372,6 +385,33 @@ class ServerTests extends TestCase {
 		assertSuccess();
 	}
 
+	/**
+		Regression test: if expand_args or create_json_result_handler throws before
+		a request_scope exists (e.g. unknown JSON-RPC method), the worker domain must
+		NOT crash. In the buggy code the unhandled exception killed the worker domain
+		so all subsequent requests would hang forever (vshaxe "Parsing Classpaths…"
+		stall). After the fix the server sends a proper JSON-RPC error response and
+		keeps processing further requests.
+	**/
+	function testUnknownDisplayMethodDoesNotCrashWorker() {
+		vfs.putContent("HelloWorld.hx", getTemplate("HelloWorld.hx"));
+
+		// Send a display request with an unknown method; the server should
+		// return a JSON-RPC error rather than crashing the worker domain.
+		var unknownMethodArgs = [
+			"-cp", ".",
+			"--display", haxe.Json.stringify({jsonrpc: "2.0", id: 1, method: "server/methodThatDoesNotExist", params: null})
+		];
+		runHaxe(unknownMethodArgs);
+		// The response should contain a JSON-RPC error (no error signal, just an error JSON in stderr)
+		Assert.isTrue(lastResult.stderr.contains('"error"'), 'Expected JSON-RPC error response, got: ${lastResult.stderr}');
+
+		// The worker domain must still be alive after the error. If it crashed
+		// this next request would time out instead of succeeding.
+		runHaxeJson(["-cp", "."], ServerMethods.ReadClassPaths, null);
+		assertSuccess();
+	}
+
 	function testSyntaxCache() {
 		vfs.putContent("HelloWorld.hx", getTemplate("HelloWorld.hx"));
 		runHaxeJson(["-cp", "."], ServerMethods.ReadClassPaths, {wait: true});
@@ -649,5 +689,34 @@ class ServerTests extends TestCase {
 		assertHasPrint('Issue9918.hx:22: correct ECast count');
 		runHaxe(args);
 		assertHasPrint('Issue9918.hx:22: correct ECast count');
+	}
+
+	#if todo
+	function testTimerOutput() {
+		vfs.putContent("HelloWorld.hx", getTemplate("HelloWorld.hx"));
+		var args = ["-main", "HelloWorld.hx", "--no-output", "-js", "no.js", "--times"];
+		runHaxe(args);
+		var stderr = lastResult.stderr;
+		// Timer output should contain header line
+		Assert.isTrue(stderr.contains("time(s)"), 'Expected timer header in stderr');
+		// Timer output should contain a meaningful timer (not just "other")
+		// "parsing" always appears for any compilation
+		Assert.isTrue(stderr.contains("parsing"), 'Expected "parsing" timer in stderr');
+	}
+	#end
+
+	function testHoverWithPackageError() {
+		vfs.putContent("pack/Main.hx", "package wrongpack;\n\nclass Main {\n\tpublic static function main() {\n\t\tvar x = 1;\n\t}\n}");
+		var args = ["--main", "pack.Main", "--interp", "--no-output"];
+		try {
+			runHaxeJson(args, DisplayMethods.Hover, {file: new FsPath("pack/Main.hx"), offset: 55});
+		} catch (e:TestException) {
+			// A properly structured JSON-RPC error is expected (package mismatch).
+			// If the response were malformed (e.g. notifications concatenated with JSON),
+			// we'd get "Response: ..." instead of the actual error message.
+			Assert.isFalse(e.message.startsWith("Response: "));
+			return;
+		}
+		// Hover may also succeed in some configurations — that's fine too.
 	}
 }

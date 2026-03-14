@@ -138,14 +138,6 @@ type display_information = {
 	mutable module_diagnostics : DisplayTypes.module_diagnostics list;
 }
 
-type json_api = {
-	send_result : Json.t -> unit;
-	send_result_raise : 'a . Json.t -> 'a;
-	send_error : Json.t list -> unit;
-	send_error_raise : 'a . Json.t list -> 'a;
-	jsonrpc : Jsonrpc_handler.jsonrpc_handler;
-}
-
 type compiler_stage =
 	| CCreated          (* Context was just created *)
 	| CInitialized      (* Context was initialized (from CLI args and such). *)
@@ -269,18 +261,38 @@ module LocalWrapper = struct
 end
 
 type part_scope = {
+	runtime_args : string list;
 	warned_positions : (string * int, string * Globals.pos * warning_option list list) Hashtbl.t;
+	has_next : bool;
 	mutable diagnostics_messages : compiler_message list;
-	io : Gctx.compilation_io;
+	mutable messages : compiler_message list;
 }
+
+type parse_input_result =
+	| NeedsTyping
+	| NoCompletionPointFound
+	| Completed
 
 type request_scope = {
 	stats : Stats.t;
 	timer_ctx : Timer.timer_context;
 	mutable cancellation_requested : bool;
+	io : CompilerIo.t;
+	result_handler : result_handler;
 }
 
-type context = {
+and result_handler = {
+	send_result : Json.t -> unit;
+	send_result_raise : 'a . Json.t -> 'a;
+	send_error : Json.t list -> unit;
+	send_error_raise : 'a . Json.t list -> 'a;
+	(** Finalize message output at the end of compilation.
+	    Handles error signaling, timer reports, log file writing, etc. *)
+	flush_messages : bool -> context -> unit;
+	set_com : context -> parse_input_result;
+}
+
+and context = {
 	request_scope : request_scope;
 	part_scope : part_scope;
 	compilation_step : int;
@@ -289,10 +301,9 @@ type context = {
 	cs : CompilationCache.t;
 	mutable cache : CompilationCache.context_cache option;
 	is_macro_context : bool;
-	mutable json_out : json_api option;
 	timer_ctx : Timer.timer_context;
 	(* config *)
-	mutable args : string list;
+	mutable parsed_args : ParsedArg.parsed_arg list;
 	mutable display : DisplayTypes.DisplayMode.settings;
 	mutable debug : bool;
 	mutable verbose : bool;
@@ -373,7 +384,7 @@ let to_gctx com = {
 	run_command_args = com.run_command_args;
 	warning = com.warning;
 	error = com.error;
-	io = com.part_scope.io;
+	io = com.request_scope.io;
 	debug = com.debug;
 	file = com.file;
 	version = com.sctx.version;
@@ -727,7 +738,7 @@ let get_config com =
 
 let memory_marker = [|Unix.time()|]
 
-let create sctx request_scope part_scope compilation_step args display_mode =
+let create sctx request_scope part_scope compilation_step display_mode =
 	let rec com = {
 		request_scope;
 		part_scope;
@@ -737,7 +748,7 @@ let create sctx request_scope part_scope compilation_step args display_mode =
 		cache = None;
 		timer_ctx = request_scope.timer_ctx;
 		stage = CCreated;
-		args = args;
+		parsed_args = [];
 		display_information = {
 			unresolved_identifiers = [];
 			display_module_has_macro_defines = false;
@@ -819,7 +830,6 @@ let create sctx request_scope part_scope compilation_step args display_mode =
 		memory_marker = memory_marker;
 		parser_cache = new hashtbl_lookup;
 		overload_cache = new hashtbl_lookup;
-		json_out = None;
 		has_error = false;
 		report_mode = RMNone;
 		is_macro_context = false;
@@ -849,7 +859,7 @@ let disable_report_mode com =
 	(fun () -> com.report_mode <- old)
 
 let log com str =
-	if com.verbose then com.part_scope.io.print (str ^ "\n")
+	if com.verbose then CompilerIo.write_out com.request_scope.io (str ^ "\n")
 
 let clone com is_macro_context =
 	{
@@ -860,7 +870,7 @@ let clone com is_macro_context =
 		sctx = com.sctx;
 		cs = com.cs;
 		timer_ctx = com.timer_ctx;
-		args = com.args;
+		parsed_args = com.parsed_args;
 		debug = com.debug;
 		display = com.display;
 		verbose = com.verbose;
@@ -900,7 +910,6 @@ let clone com is_macro_context =
 		stored_typed_exprs = com.stored_typed_exprs;
 		cached_macros = com.cached_macros;
 		memory_marker = com.memory_marker;
-		json_out = com.json_out;
 		has_error = com.has_error;
 		report_mode = com.report_mode;
 		hxb_writer_config = com.hxb_writer_config;

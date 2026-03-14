@@ -5,11 +5,24 @@ open Type
 open DisplayProcessingGlobals
 open Ipaddr
 open Json
-open CompilationContext
 open ParsedArg
 open MessageReporting
 open HxbData
 open TypeloadCacheHook
+
+type server_connection = {
+	read : unit -> string;
+	write : string -> unit;
+	close : unit -> unit;
+	get_stdin : unit -> in_channel;
+}
+
+type server_accept = unit -> server_connection
+
+let make_closed_stdin () =
+	let (stdin_r_fd, stdin_w_fd) = Unix.pipe ~cloexec:true () in
+	Unix.close stdin_w_fd;
+	Unix.in_channel_of_descr stdin_r_fd
 
 let mk_length_prefixed_communication allow_nonblock chin chout =
 	let sin = Unix.descr_of_in_channel chin in
@@ -35,7 +48,8 @@ let mk_length_prefixed_communication allow_nonblock chin chout =
 	in
 
 	fun () ->
-		{ read; write; close; get_stdin = (fun () -> None) }
+		let stdin = make_closed_stdin () in
+		{ read; write; close; get_stdin = (fun () -> stdin) }
 
 module Connect = struct
 	(* The connect function to connect to [host] at [port] and send arguments [args]. *)
@@ -68,11 +82,6 @@ module Connect = struct
 end
 
 module SocketRequest = struct
-	type t = {
-		data : string;
-		stdin : in_channel;
-	}
-
 	let setup_client_stdin_forward overflow sin =
 		(* Set up stdin forwarding: create a pipe and a thread that reads
 		   from the client socket and writes to the pipe. *)
@@ -105,10 +114,9 @@ module SocketRequest = struct
 
 	(* Reads a null-terminated request from a non-blocking socket, tracking any
 	   overflow data received past the null terminator (e.g. stdin data from the client). *)
-	let read sin bufsize =
+	let read overflow sin bufsize =
 		let tmp = Bytes.create bufsize in
 		let b = Buffer.create 0 in
-		let overflow = ref Bytes.empty in
 		let rec read_loop count =
 			try
 				let r = Unix.recv sin tmp 0 bufsize [] in
@@ -144,24 +152,39 @@ module SocketRequest = struct
 		   (to handle slow clients with retries), but the forwarding thread needs
 		   blocking recv to avoid exiting prematurely on EWOULDBLOCK. *)
 		Unix.clear_nonblock sin;
-		let stdin = setup_client_stdin_forward !overflow sin in
-		{ data; stdin }
+		data
 end
 
-let create_request_scope () =
+let create_request_scope ~is_server io display_arg =
+	let timer_ctx = Timer.make_context (Timer.make ["other"]) in
+	let result_handler = match display_arg with
+		| Some arg ->
+			JsonRpc.handle_jsonrpc_error (fun () ->
+				let input = JsonRpc.parse_request arg in
+				DisplayJson.create_json_result_handler timer_ctx io (new Jsonrpc_handler.jsonrpc_handler input)
+			) (fun json ->
+				DisplayJson.send_json io json;
+				raise Exit
+			)
+		| None ->
+			if is_server then CompilerOutput.create_server_result_handler io
+			else CompilerOutput.create_cli_result_handler io
+	in
 	{
 		stats = Stats.create ();
-		timer_ctx = Timer.make_context (Timer.make ["other"]);
+		timer_ctx;
 		cancellation_requested = false;
+		io;
+		result_handler;
 	}
 
-let process sctx request_scope entry comm (args : parsed_arg list) =
+let process sctx request_scope entry request_args =
 	let t0 = Extc.time() in
 	let curdir = Unix.getcwd () in
-	ServerMessage.arguments ["<" ^ string_of_int (List.length args) ^ " pre-parsed args>"];
+	ServerMessage.arguments (Args.to_raw_args (List.concat_map (fun part -> part.Args.args) request_args.Args.parts));
 	ServerCompilationContext.reset sctx;
 	Option.may (fun dir -> try Unix.chdir dir with _ -> ()) sctx.persistent_cwd;
-	Std.finally (fun () -> Unix.chdir curdir) (entry sctx request_scope comm) args;
+	Std.finally (fun () -> Unix.chdir curdir) (entry sctx request_scope) request_args;
 	ServerCompilationContext.run_delays sctx;
 	ServerMessage.stats request_scope.stats (Extc.time() -. t0)
 
@@ -169,14 +192,13 @@ module RequestQueue = struct
 	type request = {
 		args : parsed_arg list;
 		stdin : string option;
-		comm : unit -> communication;
+		conn : server_connection;
 	}
 
 	type t = {
 		mutex : Mutex.t;
 		semaphore : Semaphore.Counting.t;
 		mutable requests : request list;
-		mutable current_request : request_scope option;
 		shutdown_flag : bool Atomic.t;
 		cancel_token : bool Atomic.t;
 	}
@@ -186,7 +208,6 @@ module RequestQueue = struct
 			mutex = Mutex.create ();
 			semaphore = Semaphore.Counting.make 0;
 			requests = [];
-			current_request = None;
 			shutdown_flag = Atomic.make false;
 			cancel_token = Atomic.make false;
 		}
@@ -194,9 +215,9 @@ module RequestQueue = struct
 	let wake_up rq =
 		Semaphore.Counting.release rq.semaphore
 
-	let add rq args stdin comm =
+	let add rq args stdin conn =
 		Mutex.lock rq.mutex;
-		rq.requests <- { args; stdin; comm; } :: rq.requests;
+		rq.requests <- { args; stdin; conn; } :: rq.requests;
 		Mutex.unlock rq.mutex;
 		wake_up rq
 
@@ -205,6 +226,12 @@ module RequestQueue = struct
 		Atomic.set rq.shutdown_flag true;
 		wake_up rq
 end
+
+type request_outcome =
+	| Success
+	| Cancelled
+	| Errored
+	| Oom
 
 module WorkerDomain = struct
 	open RequestQueue
@@ -222,31 +249,45 @@ module WorkerDomain = struct
 		rq.requests <- [];
 		Mutex.unlock rq.mutex;
 		List.iter (fun req ->
-			let comm = req.comm() in
-			(try comm.write_err "\x02\nServer shutdown\n"; with _ -> ());
-			comm.close();
+			let conn = req.conn in
+			(* No CompilerIo.t exists for pending requests, so signal error
+			   directly through the raw connection using v1 protocol encoding. *)
+			(try conn.write "\x02\nServer shutdown\n"; with _ -> ());
+			conn.close();
 		) pending
 
-	let run_request sctx request_scope entry {comm; stdin; args} =
-		let comm = (comm()) in
+	let create_request_io request =
+		let conn = request.conn in
+		let write_out s = conn.write ("\x01" ^ String.concat "\x01" (ExtString.String.nsplit s "\n") ^ "\n") in
+		let write_err s = conn.write s in
+		let write_result s = conn.write s in
+		let signal_error () = conn.write "\x02\n" in
+		CompilerIo.create ~write_out ~write_err ~write_result ~signal_error (conn.get_stdin())
+
+	let run_request sctx io entry request =
+		sctx.current_stdin <- request.stdin;
 		try
-			process sctx request_scope entry comm args;
-			comm
+			let request_args = Args.expand_args request.args in
+			let request_scope = create_request_scope ~is_server:true io request_args.display_arg in
+			process sctx request_scope entry request_args;
+			Success
 		with
 		| Cancelled ->
 			ServerMessage.uncaught_error "Compilation cancelled";
-			(try comm.write_err "\x02\nCancelled\n"; with _ -> ());
-			comm;
+			(try CompilerIo.signal_error io; CompilerIo.write_err io "Cancelled\n"; with _ -> ());
+			Cancelled;
+		| Arg.Bad msg ->
+			(try CompilerIo.signal_error io; CompilerIo.write_err io msg; with _ -> ());
+			Errored
+		| Exit ->
+			(* From JSON-RPC failure *)
+			Errored
 		| e ->
 			let estr = Printexc.to_string e in
 			ServerMessage.uncaught_error estr;
-			(try comm.write_err ("\x02\n" ^ estr); with _ -> ());
+			(try CompilerIo.signal_error io; CompilerIo.write_err io (estr ^ "\n"); with _ -> ());
 			if Helper.is_debug_run then print_endline (estr ^ "\n" ^ Printexc.get_backtrace());
-			if e = Out_of_memory then begin
-				comm.close();
-				exit (-1);
-			end;
-			comm
+			if e = Out_of_memory then Oom else Errored
 
 	let create sctx entry rq =
 		let domain = Domain.spawn (fun () ->
@@ -271,10 +312,17 @@ module WorkerDomain = struct
 						Mutex.unlock rq.mutex;
 						sctx.current_stdin <- request.stdin;
 						Atomic.set rq.cancel_token false;
-						let request_scope = create_request_scope() in
-						rq.current_request <- Some request_scope;
-						let comm = run_request sctx request_scope entry request in
-						comm.close();
+						let io = create_request_io request in
+						let outcome = run_request sctx io entry request in
+						CompilerIo.close io;
+						request.conn.close();
+						begin match outcome with
+						| Oom ->
+							exit (-1)
+						| _ ->
+							()
+						end;
+
 						sctx.current_stdin <- None;
 						ServerCache.cleanup sctx;
 						if sctx.was_compilation then
@@ -290,18 +338,18 @@ module WorkerDomain = struct
 		}
 end
 
-let setup_server_context verbose =
+let setup_server_context verbose is_server =
 	if verbose then ServerMessage.enable_all ();
 	Sys.catch_break false; (* Sys can never catch a break *)
 	(* Create server context and set up hooks for parsing and typing *)
-	let sctx = ServerCompilationContext.create verbose in
+	let sctx = ServerCompilationContext.create verbose is_server in
 	ServerCache.enable_cache_mode sctx;
 	sctx
 
 (* The server main loop. Waits for the [accept] call to then process the sent compilation
    parameters through [process_params]. *)
 let wait_loop entry verbose accept =
-	let sctx = setup_server_context verbose in
+	let sctx = setup_server_context verbose true in
 	let rq = RequestQueue.create () in
 	let worker = WorkerDomain.create sctx entry rq in
 	(* Main loop: accept connections and enqueue requests for the worker.
@@ -321,8 +369,7 @@ let wait_loop entry verbose accept =
 				in
 				let data = Helper.parse_hxml_data hxml in
 				let parsed_args = Args.parse_args data in
-				let comm () = ServerCommunication.Communication.create_pipe sctx conn in
-				RequestQueue.add rq parsed_args stdin comm;
+				RequestQueue.add rq parsed_args stdin conn;
 			with Unix.Unix_error _ ->
 				ServerMessage.socket_message "Connection Aborted";
 				conn.close()
@@ -362,13 +409,13 @@ let init_wait_socket ip port =
 		let sin, _ = Unix.accept sock in
 		Unix.set_nonblock sin;
 		ServerMessage.socket_message "Client connected";
-		let stdin_pipe = ref None in
+		let overflow = ref Bytes.empty in
+		let stdin_ref = ref (make_closed_stdin ()) in
 		let read () =
-			let req = SocketRequest.read sin bufsize in
-			stdin_pipe := Some (req.stdin);
-			req.data
+			let data = SocketRequest.read overflow sin bufsize in
+			stdin_ref := SocketRequest.setup_client_stdin_forward !overflow sin;
+			data
 		in
-		let get_stdin () = !stdin_pipe in
 		let closed = ref false in
 		let close() =
 			if not !closed then begin
@@ -386,6 +433,6 @@ let init_wait_socket ip port =
 				| Some _ -> close()
 				| None -> PipeThings.ssend sin (Bytes.unsafe_of_string s);
 		in
-		{ read; write; close; get_stdin }
+		{ read; write; close; get_stdin = (fun () -> !stdin_ref) }
 	) in
 	accept

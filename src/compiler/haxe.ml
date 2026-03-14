@@ -86,7 +86,6 @@ set_binary_mode_out stderr true;
 let parsed_args = Args.parse_args args in
 let curdir = Unix.getcwd () in
 let request_args = try Args.expand_args parsed_args with Arg.Bad msg -> bad_arg msg in
-
 Unix.chdir curdir;
 
 (* Are we a client? *)
@@ -131,13 +130,14 @@ end;
 
 (* We are a normal non-server compilation. *)
 
-let sctx = Server.setup_server_context false in
-let comm = ServerCommunication.Communication.create_stdio () in
-let request_scope = create_request_scope() in
-let code = Compiler.HighLevel.entry sctx request_scope comm parsed_args in
+let sctx = Server.setup_server_context false false in
+let io = CompilerIo.create_stdio_io () in
+let request_scope = create_request_scope ~is_server:false io request_args.display_arg in
+let code = try Compiler.HighLevel.entry sctx request_scope request_args with Arg.Bad msg -> bad_arg msg in
 if code = 0 then begin
 	let timer_ctx = request_scope.timer_ctx in
-	if timer_ctx.measure_times = Yes then Timer.report_times timer_ctx (fun s -> prerr_string (s ^ "\n"));
+	if timer_ctx.measure_times = Yes then
+		CompilerOutput.send_timer_report io timer_ctx
 end;
 ServerCompilationContext.dispose sctx;
 exit code;

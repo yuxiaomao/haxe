@@ -2326,7 +2326,7 @@ let macro_api ccom get_api =
 			let com = ccom() in
 			encode_obj [
 				"version", vint com.sctx.version.version;
-				"args", encode_array (List.map encode_string com.args);
+				"args", encode_array (List.map encode_string (Args.to_raw_args com.parsed_args));
 				"debug", vbool com.debug;
 				"verbose", vbool com.verbose;
 				"foptimize", vbool com.foptimize;
@@ -2520,17 +2520,6 @@ let macro_api ccom get_api =
 			let name = decode_string name in
 			v.v_name <- name;
 			vnull;
-		);
-		"send_json", vfun1 (fun json ->
-			begin match (ccom()).json_out with
-			| Some api ->
-				let json = decode_string json in
-				let lexbuf = Sedlexing.Utf8.from_string json in
-				let parse = Json.Reader.read_json lexbuf in
-				api.send_result_raise parse;
-			| None ->
-				vbool false
-			end
 		);
 		"get_hxb_writer_config", vfun0 (fun () ->
 			(get_api()).get_hxb_writer_config ()
