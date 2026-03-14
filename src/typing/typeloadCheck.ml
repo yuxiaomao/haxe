@@ -488,8 +488,8 @@ module Inheritance = struct
 					mf_fields = List.map (fun (cf,t) -> (cf,t,CompletionType.from_type (Display.get_import_status ctx) t)) l;
 					mf_cause = ImplementedInterface(intf,params);
 				} in
-				let display = ctx.com.display_information in
-				display.module_diagnostics <- MissingFields diag :: display.module_diagnostics
+				let cm = DiagnosticsPrinter.make_missing_fields_message diag in
+				CompilerMessage.add_module_diagnostic ctx.com c.cl_module cm
 			end
 		) c.cl_implements
 
@@ -524,8 +524,8 @@ module Inheritance = struct
 				mf_fields = List.rev_map (fun (cf,t) -> (cf,t,CompletionType.from_type (Display.get_import_status ctx) t)) l;
 				mf_cause = AbstractParent(csup,params);
 			} in
-			let display = ctx.com.display_information in
-			display.module_diagnostics <- MissingFields diag :: display.module_diagnostics
+			let cm = DiagnosticsPrinter.make_missing_fields_message diag in
+			CompilerMessage.add_module_diagnostic ctx.com c.cl_module cm
 		| l ->
 			let pctx = print_context() in
 			let sub = List.map (fun (cf,_) ->

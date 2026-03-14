@@ -16,6 +16,7 @@
 	along with this program; if not, write to the Free Software
 	Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *)
+open Message
 open Ast
 open Type
 open Error
@@ -132,12 +133,6 @@ class file_keys = object(self)
 
 end
 
-type display_information = {
-	mutable unresolved_identifiers : (string * pos * (string * CompletionItem.t * int) list) list;
-	mutable display_module_has_macro_defines : bool;
-	mutable module_diagnostics : DisplayTypes.module_diagnostics list;
-}
-
 type compiler_stage =
 	| CCreated          (* Context was just created *)
 	| CInitialized      (* Context was initialized (from CLI args and such). *)
@@ -228,6 +223,7 @@ end
 type parser_state = {
 	mutable was_auto_triggered : bool;
 	mutable had_parser_resume : bool;
+	mutable display_module_has_macro_defines : bool;
 	delayed_syntax_completion : Parser.syntax_completion_on option Atomic.t;
 	special_identifier_files : (Path.UniqueKey.t,string) ThreadSafeHashtbl.t;
 }
@@ -264,8 +260,8 @@ type part_scope = {
 	runtime_args : string list;
 	warned_positions : (string * int, string * Globals.pos * warning_option list list) Hashtbl.t;
 	has_next : bool;
-	mutable diagnostics_messages : compiler_message list;
-	mutable messages : compiler_message list;
+	mutable messages : Message.t list;
+	mutable has_error : bool;
 }
 
 type parse_input_result =
@@ -322,11 +318,11 @@ and context = {
 	(* communication *)
 	mutable error : Gctx.error_function;
 	mutable error_ext : Error.error -> unit;
-	mutable info : ?depth:int -> ?from_macro:bool -> string -> pos -> unit;
+	mutable info : ?depth:int -> string -> pos -> unit;
 	mutable warning : Gctx.warning_function;
 	mutable warning_options : warning_option list list;
-	mutable get_messages : unit -> compiler_message list;
-	mutable filter_messages : (compiler_message -> bool) -> unit;
+	mutable get_messages : unit -> Message.t list;
+	mutable filter_messages : (Message.t -> bool) -> unit;
 	mutable run_command : string -> int;
 	mutable run_command_args : string -> string list -> int;
 	(* typing setup *)
@@ -340,7 +336,6 @@ and context = {
 	(* typing state *)
 	mutable std : tclass;
 	mutable global_metadata : (string list * metadata_entry * (bool * bool * bool)) list;
-	display_information : display_information;
 	file_keys : file_keys;
 	mutable file_contents : (Path.UniqueKey.t * string option) list;
 	parser_cache : (string,(type_def * pos) list) lookup;
@@ -351,7 +346,6 @@ and context = {
 	module_lut : module_lut;
 	module_nonexistent_lut : (path,bool) lookup;
 	fake_modules : (Path.UniqueKey.t,module_def) Hashtbl.t;
-	mutable has_error : bool;
 	pass_debug_messages : string DynArray.t;
 	(* output *)
 	mutable file : string;
@@ -408,11 +402,14 @@ let enter_stage com stage =
 
 let ignore_error com =
 	let b = com.display.dms_error_policy = EPIgnore in
-	if b then com.has_error <- true;
+	if b then com.part_scope.has_error <- true;
 	b
 
 let module_warning com m w options msg p =
-	if com.display.dms_full_typing then DynArray.add m.m_extra.m_cache_bound_objects (Warning(w,options,msg,p));
+	if com.display.dms_full_typing then begin
+		let cm = make_message com.is_macro_context msg p 0 (MKWarning(w, options)) in
+		DynArray.add m.m_extra.m_cache_bound_objects (Message cm)
+	end;
 	com.warning w options msg p
 
 (* Defines *)
@@ -749,11 +746,6 @@ let create sctx request_scope part_scope compilation_step display_mode =
 		timer_ctx = request_scope.timer_ctx;
 		stage = CCreated;
 		parsed_args = [];
-		display_information = {
-			unresolved_identifiers = [];
-			display_module_has_macro_defines = false;
-			module_diagnostics = [];
-		};
 		debug = false;
 		display = display_mode;
 		verbose = false;
@@ -794,8 +786,8 @@ let create sctx request_scope part_scope compilation_step display_mode =
 		user_metas = Hashtbl.create 0;
 		get_macros = (fun() -> None);
 		local_wrapper = LocalWrapper.null_wrapper;
-		info = (fun ?depth ?from_macro _ _ -> die "" __LOC__);
-		warning = (fun ?depth ?from_macro _ _ _ -> die "" __LOC__);
+		info = (fun ?depth _ _ -> die "" __LOC__);
+		warning = (fun ?depth _ _ _ -> die "" __LOC__);
 		warning_options = [List.map (fun w -> {wo_warning = w;wo_mode = WMDisable}) WarningList.disabled_warnings];
 		error = (fun _ _ -> die "" __LOC__);
 		error_ext = (fun _ -> die "" __LOC__);
@@ -830,7 +822,6 @@ let create sctx request_scope part_scope compilation_step display_mode =
 		memory_marker = memory_marker;
 		parser_cache = new hashtbl_lookup;
 		overload_cache = new hashtbl_lookup;
-		has_error = false;
 		report_mode = RMNone;
 		is_macro_context = false;
 		functional_interface_lut = new Lookup.hashtbl_lookup;
@@ -840,6 +831,7 @@ let create sctx request_scope part_scope compilation_step display_mode =
 		parser_state = {
 			was_auto_triggered = false;
 			had_parser_resume = false;
+			display_module_has_macro_defines = false;
 			delayed_syntax_completion = Atomic.make None;
 			special_identifier_files = ThreadSafeHashtbl.create 0;
 		};
@@ -852,6 +844,21 @@ let is_diagnostics com = match com.report_mode with
 	| _ -> false
 
 let is_compilation com = com.display.dms_kind = DMNone && not (is_diagnostics com)
+
+(** Returns true when there is an error that should be reported/acted upon.
+    In compilation mode, any has_error is significant.
+    In display mode, has_error can be set transiently during type resolution
+    without producing actual error messages, so we require messages to exist.
+    Diagnostics-only messages (DKMissingFields, DKUnresolvedIdentifier) are
+    not counted as reportable errors — they are diagnostics data that should
+    not prevent context caching. *)
+let has_error_to_report com =
+	let has_reportable_message = List.exists (fun cm ->
+		match cm.cm_diagnostics_kind with
+		| MessageKind.DKMissingFields | MessageKind.DKUnresolvedIdentifier -> false
+		| _ -> true
+	) com.part_scope.messages in
+	com.part_scope.has_error && (is_compilation com || has_reportable_message)
 
 let disable_report_mode com =
 	let old = com.report_mode in
@@ -910,7 +917,6 @@ let clone com is_macro_context =
 		stored_typed_exprs = com.stored_typed_exprs;
 		cached_macros = com.cached_macros;
 		memory_marker = com.memory_marker;
-		has_error = com.has_error;
 		report_mode = com.report_mode;
 		hxb_writer_config = com.hxb_writer_config;
 		parser_state = com.parser_state;
@@ -919,11 +925,6 @@ let clone com is_macro_context =
 		(* reinits *)
 		cache = None;
 		stage = CCreated;
-		display_information = {
-			unresolved_identifiers = [];
-			display_module_has_macro_defines = false;
-			module_diagnostics = [];
-		};
 		features = Hashtbl.create 0;
 		empty_class_path = new ClassPath.directory_class_path "" User;
 		class_paths = new ClassPaths.class_paths;
@@ -1118,15 +1119,14 @@ let hash f =
 	done;
 	if Sys.word_size = 64 then Int32.to_int (Int32.shift_right (Int32.shift_left (Int32.of_int !h) 1) 1) else !h
 
-let add_diagnostics_message ?(depth = 0) ?(from_macro = false) ?(code = None) com s p kind sev =
-	if sev = MessageSeverity.Error then com.has_error <- true;
-	let di = com.part_scope in
-	di.diagnostics_messages <- (make_compiler_message ~from_macro ~code s p depth kind sev) :: di.diagnostics_messages
+let add_diagnostics_message ?(depth = 0) ?(diagnostics_kind = MessageKind.DKCompilerMessage) com s p message_kind =
+	if message_kind_severity message_kind = MessageSeverity.Error then com.part_scope.has_error <- true;
+	com.part_scope.messages <- (make_diagnostic com.is_macro_context diagnostics_kind (JString s) p depth message_kind) :: com.part_scope.messages
 
 let display_error_ext com err =
 	if is_diagnostics com then begin
 		Error.recurse_error (fun depth err ->
-			add_diagnostics_message ~depth ~from_macro:err.err_from_macro com (Error.error_msg err.err_message) err.err_pos MessageKind.DKCompilerMessage MessageSeverity.Error;
+			add_diagnostics_message ~depth com (Error.error_msg err.err_message) err.err_pos MKError;
 		) err;
 	end else
 		com.error_ext err

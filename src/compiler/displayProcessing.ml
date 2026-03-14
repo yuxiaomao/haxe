@@ -20,14 +20,13 @@ let process_display_arg com actx =
 
 let process_display_configuration com =
 	if is_diagnostics com then begin
-		com.info <- (fun ?(depth = 0) ?(from_macro = false) s p ->
-			add_diagnostics_message ~depth ~from_macro com s p DKCompilerMessage Information
+		com.info <- (fun ?(depth = 0) s p ->
+			add_diagnostics_message ~depth com s p MKInfo
 		);
-		com.warning <- (fun ?(depth = 0) ?(from_macro = false) w options s p ->
+		com.warning <- (fun ?(depth = 0) w options s p ->
 			match Warning.get_mode w (options @ com.warning_options) with
 			| WMEnable ->
-				let wobj = Warning.warning_obj w in
-				add_diagnostics_message ~depth ~from_macro ~code:(Some wobj.w_name) com s p DKCompilerMessage Warning
+				add_diagnostics_message ~depth com s p (MKWarning(w,options))
 			| WMDisable ->
 				()
 		);
@@ -191,8 +190,7 @@ let maybe_load_display_file_before_typing tctx display_file_dot_path = match dis
 (* 5. Display processing after typing *)
 
 let handle_display_after_typing com tctx display_file_dot_path =
-	let has_error = com.has_error && (Common.is_compilation com || com.part_scope.messages <> []) in
-	if com.display.dms_kind = DMNone && has_error then
+	if com.display.dms_kind = DMNone && com.part_scope.has_error && Common.is_compilation com then
 		true
 	else begin
 	begin match com.display.dms_kind,Atomic.get com.parser_state.delayed_syntax_completion with
@@ -200,11 +198,11 @@ let handle_display_after_typing com tctx display_file_dot_path =
 		| _ -> ()
 	end;
 	if com.display.dms_exit_during_typing then begin
-		if com.part_scope.has_next || has_error then
+		if com.part_scope.has_next || Common.has_error_to_report com then
 			true
 		else begin
 		(* If we didn't find a completion point, load the display file in macro mode. *)
-		if com.display_information.display_module_has_macro_defines then
+		if com.parser_state.display_module_has_macro_defines then
 			ignore(load_display_module_in_macro tctx display_file_dot_path true);
 		raise (DisplayException.DisplayException DisplayNoResult)
 		end
@@ -259,7 +257,7 @@ let handle_display_after_finalization com tctx display_file_dot_path =
 	let should_load_in_macro =
 		(* Special case for the special case: If the display file has a block which becomes active if `macro` is defined, we can safely
 			type the module in macro context. (#8682). *)
-		not (is_diagnostics com) || com.display_information.display_module_has_macro_defines
+		not (is_diagnostics com) || com.parser_state.display_module_has_macro_defines
 	in
 	if com.display.dms_force_macro_typing && should_load_in_macro then begin
 		match load_display_module_in_macro tctx display_file_dot_path false with

@@ -1,5 +1,6 @@
 open Extlib_leftovers
 open Globals
+open Message
 open Common
 
 let resolve_source file l1 p1 l2 p2 =
@@ -127,7 +128,7 @@ let compiler_pretty_message_string defines ectx cm =
 			| Some (p, sev, depth) -> (Some p, Some sev, depth)
 		in
 
-		let sev_changed = prev_sev = None || Some cm.cm_severity <> prev_sev in
+		let sev_changed = prev_sev = None || Some (cm_severity cm) <> prev_sev in
 		let pos_changed = (prev_pos = None || cm.cm_pos <> Option.get prev_pos || (cm.cm_depth <> prev_nl && cm.cm_depth <> prev_nl + 1)) && (parent_pos = null_pos || cm.cm_pos <> parent_pos) in
 		let file_changed = prev_pos = None || (pos_changed && match (cm.cm_pos.pfile, (Option.get prev_pos).pfile) with
 			| (f1, f2) when (is_unknown_file f1) && (is_unknown_file f2) -> false
@@ -146,7 +147,7 @@ let compiler_pretty_message_string defines ectx cm =
 		let c_bold = if no_color then "" else "\x1b[1m" in
 		let c_dim = if no_color then "" else "\x1b[2m" in
 
-		let (c_sev, c_sev_bg) = if no_color then ("", "") else match cm.cm_severity with
+		let (c_sev, c_sev_bg) = if no_color then ("", "") else match cm_severity cm with
 			| MessageSeverity.Warning -> ("\x1b[33m", "\x1b[30;43m")
 			| Information | Hint -> ("\x1b[34m", "\x1b[30;44m")
 			| Error -> ("\x1b[31m", "\x1b[30;41m")
@@ -154,7 +155,7 @@ let compiler_pretty_message_string defines ectx cm =
 
 		let sev_label = if cm.cm_depth > 0 then " -> " else Printf.sprintf
 			(if no_color then "[%s]" else " %s ")
-			(match cm.cm_severity with
+			(match cm_severity cm with
 				| MessageSeverity.Warning -> "WARNING"
 				| Information -> "INFO"
 				| Hint -> "HINT"
@@ -237,7 +238,7 @@ let compiler_pretty_message_string defines ectx cm =
 			(if (ExtString.String.starts_with str "... ") then String.sub str 4 ((String.length str) - 4) else str)
 		) !out (ExtString.String.nsplit cm.cm_message "\n");
 
-		ectx.previous <- Some ((if is_null_pos then null_pos else cm.cm_pos), cm.cm_severity, cm.cm_depth);
+		ectx.previous <- Some ((if is_null_pos then null_pos else cm.cm_pos), cm_severity cm, cm.cm_depth);
 		ectx.gutter <- (IntMap.add cm.cm_depth gutter_len ectx.gutter);
 
 		(* Indent sub errors *)
@@ -255,8 +256,8 @@ let compiler_pretty_message_string defines ectx cm =
 		)
 	end
 
-let compiler_message_string ectx cm =
-	let str = match cm.cm_severity with
+let message_string ectx cm =
+	let str = match cm_severity cm with
 		| MessageSeverity.Warning -> "Warning : " ^ cm.cm_message
 		| Information | Error | Hint -> cm.cm_message
 	in
@@ -284,7 +285,7 @@ let compiler_indented_message_string ectx cm =
 	(* Filter some messages that don't add much when using this message renderer *)
 	| "End of overload failure reasons" -> None
 	| _ ->
-		let str = match cm.cm_severity with
+		let str = match cm_severity cm with
 			| MessageSeverity.Warning -> "Warning : " ^ cm.cm_message
 			| Information -> "Info : " ^ cm.cm_message
 			| Error | Hint -> cm.cm_message
@@ -318,7 +319,7 @@ let get_max_line max_lines messages =
 let display_source_at defines p =
 	let absolute_positions = Define.defined defines Define.MessageAbsolutePositions in
 	let ectx = create_error_context absolute_positions in
-	let msg = make_compiler_message "" p 0 MessageKind.DKCompilerMessage MessageSeverity.Information in
+	let msg = make_message false "" p 0 MKInfo in
 	ectx.max_lines <- get_max_line ectx.max_lines [msg];
 	match compiler_pretty_message_string defines ectx msg with
 		| None -> ()
@@ -331,7 +332,7 @@ let get_formatter defines def default =
 	match format_mode with
 		| "pretty" -> compiler_pretty_message_string defines
 		| "indent" -> compiler_indented_message_string
-		| "classic" -> compiler_message_string
+		| "classic" -> message_string
 		| m -> begin
 			let def = Define.get_define_key def in
 			raise (ConfigError (Printf.sprintf "Invalid message reporting mode: \"%s\", expected classic | pretty | indent (for -D %s)." m def))
@@ -376,7 +377,7 @@ let display_messages_from defines messages ~set_error on_message = begin
 		try get_formatter defines def default
 		with | ConfigError s ->
 			error s;
-			compiler_message_string
+			message_string
 	in
 
 	let message_formatter = get_formatter defines Define.MessageReporting "pretty" in
@@ -419,7 +420,7 @@ let display_messages_from defines messages ~set_error on_message = begin
 
 		match (message_formatter ectx cm) with
 			| None -> ()
-			| Some str -> on_message cm.cm_severity str
+			| Some str -> on_message (cm_severity cm) str
 	) messages;
 
 	if !log_messages then (Option.get !close_logs) ();
@@ -429,5 +430,5 @@ end
     Reverses [ctx.messages] (which accumulates newest-first) to oldest-first order. *)
 let display_messages com on_message =
 	display_messages_from com.defines (List.rev com.part_scope.messages)
-		~set_error:(fun () -> com.has_error <- true) on_message
+		~set_error:(fun () -> com.part_scope.has_error <- true) on_message
 
