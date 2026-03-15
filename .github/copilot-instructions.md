@@ -19,6 +19,7 @@ This is the Haxe compiler repository. Haxe is an open source toolkit that allows
   - `opam install haxe --deps-only` - Install OCaml dependencies (after pinning the local checkout)
   - `opam exec -- make ADD_REVISION=1 -f Makefile.win -s -j haxe` - Typical Windows compiler build command used in CI/tasks
   - `dune build` - Build using dune directly
+- **Reading build output**: dune shows progress like `Done: 95% (1643/1714, 71 left)` using carriage-return overwriting, which may appear as intermediate lines when read by tools. The VS Code tasks append `=== Build complete ===` on success — that line is the definitive signal the build finished. If you don't see that line, check the exit code of the terminal command rather than guessing from progress output.
 
 ## Development Setup
 
