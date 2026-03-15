@@ -3,9 +3,6 @@ open Message
 open Common
 open ParsedArg
 
-let add_error_message com ?(depth=0) msg p =
-	CompilerMessage.add_message com msg p depth MKError
-
 let error_ext com (err : Error.error) =
 	com.error_ext err
 
@@ -469,13 +466,7 @@ let finalize com =
 		List.iter (fun lib -> lib#close) com.native_libs.swf_libs;
 	end
 
-let emit_completion com str =
-	ServerMessage.completion str;
-	CompilerIo.write_err com.request_scope.io str
-
 module ContextFlush = struct
-	open MessageReporting
-
 	let flush_context com =
 		match com.report_mode with
 		| RMDiagnostics _ ->
