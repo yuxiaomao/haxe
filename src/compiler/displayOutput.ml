@@ -13,33 +13,6 @@ open Genjson
 
 open Json
 
-let print_signature tl display_arg =
-	let st = s_type (print_context()) in
-	let s_arg (n,o,t) = Printf.sprintf "%s%s:%s" (if o then "?" else "") n (st t) in
-	let s_fun args ret = Printf.sprintf "(%s):%s" (String.concat ", " (List.map s_arg args)) (st ret) in
-	let siginf = List.map (fun (((args,ret),_),doc) ->
-		let label = s_fun args ret in
-		let parameters =
-			List.map (fun arg ->
-					let label = s_arg arg in
-					JObject [
-						"label",JString label
-					]
-			) args
-		in
-		let js = [
-			"label",JString label;
-			"parameters",JArray parameters;
-		] in
-		JObject (match doc with None -> js | Some d -> ("documentation",JString (gen_doc_text d)) :: js)
-	) tl in
-	let jo = JObject [
-		"signatures",JArray siginf;
-		"activeParameter",JInt (arg_index tl 0 display_arg);
-		"activeSignature",JInt 0;
-	] in
-	string_of_json jo
-
 (* Mode processing *)
 
 let handle_syntax_completion com kind subj =
