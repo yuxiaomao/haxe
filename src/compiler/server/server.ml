@@ -171,13 +171,13 @@ let create_request_scope ~is_server io display_arg =
 		result_handler;
 	}
 
-let process sctx request_scope entry request_args =
+let process sctx request_scope request_args =
 	let t0 = Extc.time() in
 	let curdir = Unix.getcwd () in
 	ServerMessage.arguments (Args.string_of_request_args request_args);
 	ServerCompilationContext.reset sctx;
 	Option.may (fun dir -> try Unix.chdir dir with _ -> ()) sctx.persistent_cwd;
-	ignore (Std.finally (fun () -> Unix.chdir curdir) (entry sctx request_scope) request_args);
+	ignore (Std.finally (fun () -> Unix.chdir curdir) (HighLevel.entry sctx request_scope) request_args);
 	ServerCompilationContext.run_delays sctx;
 	ServerMessage.stats request_scope.stats (Extc.time() -. t0)
 
@@ -257,12 +257,12 @@ module WorkerDomain = struct
 		let signal_error () = conn.write "\x02\n" in
 		CompilerIo.create ~write_out ~write_err ~write_result ~signal_error (conn.get_stdin())
 
-	let run_request sctx io entry request =
+	let run_request sctx io request =
 		sctx.current_stdin <- request.stdin;
 		try
 			let request_args = Args.expand_args request.args in
 			let request_scope = create_request_scope ~is_server:true io request_args.display_arg in
-			process sctx request_scope entry request_args;
+			process sctx request_scope request_args;
 			Success
 		with
 		| Cancelled ->
@@ -282,7 +282,7 @@ module WorkerDomain = struct
 			if Helper.is_debug_run then print_endline (estr ^ "\n" ^ Printexc.get_backtrace());
 			if e = Out_of_memory then Oom else Errored
 
-	let create sctx entry rq =
+	let create sctx rq =
 		let domain = Domain.spawn (fun () ->
 			let cs = sctx.cs in
 			let rec loop () =
@@ -306,7 +306,7 @@ module WorkerDomain = struct
 						sctx.current_stdin <- request.stdin;
 						Atomic.set rq.cancel_token false;
 						let io = create_request_io request in
-						let outcome = run_request sctx io entry request in
+						let outcome = run_request sctx io request in
 						CompilerIo.close io;
 						request.conn.close();
 						begin match outcome with
@@ -341,10 +341,10 @@ let setup_server_context verbose is_server =
 
 (* The server main loop. Waits for the [accept] call to then process the sent compilation
    parameters through [process_params]. *)
-let wait_loop entry verbose accept =
+let wait_loop verbose accept =
 	let sctx = setup_server_context verbose true in
 	let rq = RequestQueue.create () in
-	let worker = WorkerDomain.create sctx entry rq in
+	let worker = WorkerDomain.create sctx rq in
 	(* Main loop: accept connections and enqueue requests for the worker.
 	   The loop exits if the accept function raises an exception (e.g. socket closed). *)
 	begin try

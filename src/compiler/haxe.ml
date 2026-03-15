@@ -100,8 +100,6 @@ begin match request_args.connect_arg with
 		()
 end;
 
-let entry = Compiler.HighLevel.entry in
-
 let is_verbose () = match request_args.parts with
 	| [] ->
 		false
@@ -117,12 +115,12 @@ begin match request_args.server_mode with
 			let host, port = parse_host_port hp in
 			Server.init_wait_socket host port
 		in
-		let code = Server.wait_loop entry (is_verbose()) accept in
+		let code = Server.wait_loop (is_verbose()) accept in
 		exit code
 	| SMConnect hp ->
 		let host, port = parse_host_port hp in
 		let accept = Server.init_wait_connect host port in
-		let code = Server.wait_loop entry (is_verbose()) accept in
+		let code = Server.wait_loop (is_verbose()) accept in
 		exit code
 	| SMNone ->
 		()
@@ -133,7 +131,7 @@ end;
 let sctx = Server.setup_server_context false false in
 let io = CompilerIo.create_stdio_io () in
 let request_scope = create_request_scope ~is_server:false io request_args.display_arg in
-let code = try Compiler.HighLevel.entry sctx request_scope request_args with Arg.Bad msg -> bad_arg msg in
+let code = try HighLevel.entry sctx request_scope request_args with Arg.Bad msg -> bad_arg msg in
 if code = 0 then begin
 	let timer_ctx = request_scope.timer_ctx in
 	if timer_ctx.measure_times = Yes then
