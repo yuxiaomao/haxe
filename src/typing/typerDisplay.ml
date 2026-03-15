@@ -126,11 +126,11 @@ let completion_item_of_expr ctx e =
 					| 'u' -> doc c "use UTF-8 matching"
 					| _ -> die "" __LOC__
 				in
-				let present = List.map f present in
+					DisplayException.send_signatures_raise ctx.com overloads 0 display_arg SKCall
 				let present = match present with [] -> [] | _ -> "\n\nActive flags:\n\n" :: present in
 				let absent = List.map f absent in
 				let absent = match absent with [] -> [] | _ -> "\n\nInactive flags:\n\n" :: absent in
-				(TInst(c,tl)),Some ("Regular expression\n\n" ^ (String.concat "\n" (present @ absent)))
+					DisplayException.send_positions_raise ctx.com []
 			| _ -> *)
 				let fa = get_constructor_access c tl e.epos in
 				let fcc = unify_field_call ctx fa el [] e.epos false in
@@ -183,12 +183,12 @@ let display_dollar_type ctx p make_type =
 	let arg = ["expression",false,mono] in
 	begin match ctx.com.display.dms_kind with
 	| DMSignature ->
-		raise_signatures [(convert_function_signature ctx PMap.empty (arg,mono),doc)] 0 0 SKCall
+		DisplayException.send_signatures_raise ctx.com [(convert_function_signature ctx PMap.empty (arg,mono),doc)] 0 0 SKCall
 	| DMHover ->
 		let t = TFun(arg,mono) in
 		raise_hover (make_ci_expr (mk (TIdent "trace") t p) (make_type t)) (Some (WithType.named_argument "expression")) p
 	| DMDefinition | DMTypeDefinition ->
-		raise_positions []
+		DisplayException.send_positions_raise ctx.com []
 	| _ ->
 		raise_typing_error "Unsupported method" p
 	end
@@ -233,7 +233,7 @@ let rec handle_signature_display ctx e_ast with_type =
 		in
 		let overloads = match loop [] tl with [] -> tl | tl -> tl in
 		let overloads = List.map (fun (t,doc,values) -> (convert_function_signature ctx values t,doc)) overloads in
-		raise_signatures overloads 0 (* ? *) display_arg SKCall
+		DisplayException.send_signatures_raise ctx.com overloads 0 (* ? *) display_arg SKCall
 	in
 	let process_overloads stat co (map,cf,t) =
 		let is_wacky_overload = not (has_class_field_flag cf CfOverload) in
@@ -317,7 +317,7 @@ let rec handle_signature_display ctx e_ast with_type =
 			begin match follow e1.etype with
 			| TInst({cl_path=([],"Array")},[t]) ->
 				let res = convert_function_signature ctx PMap.empty (["index",false,ctx.t.tint],t) in
-				raise_signatures [res,doc_from_string "The array index"] 0 0 SKCall
+				DisplayException.send_signatures_raise ctx.com [res,doc_from_string "The array index"] 0 0 SKCall
 			| TAbstract(a,tl) ->
 				(match a.a_impl with Some c -> ignore(c.cl_build()) | _ -> ());
 				let sigs = ExtList.List.filter_map (fun cf -> match follow cf.cf_type with
@@ -333,9 +333,9 @@ let rec handle_signature_display ctx e_ast with_type =
 					| _ ->
 						None
 				) a.a_array in
-				raise_signatures sigs 0 0 SKArrayAccess
+				DisplayException.send_signatures_raise ctx.com sigs 0 0 SKArrayAccess
 			| _ ->
-				raise_signatures [] 0 0 SKArrayAccess
+				DisplayException.send_signatures_raise ctx.com [] 0 0 SKArrayAccess
 			end
 		| _ -> raise_typing_error "Call expected" p
 
@@ -488,7 +488,7 @@ and display_expr ctx e_ast e dk mode with_type p =
 			[]
 		in
 		let pl = loop e in
-		raise_positions pl
+		DisplayException.send_positions_raise ctx.com pl
 	| DMTypeDefinition ->
 		raise_position_of_type ctx e.etype
 	| DMDefault when not ctx.com.part_scope.parser_state.had_parser_resume ->
@@ -608,12 +608,12 @@ let handle_display ctx e_ast dk mode with_type =
 		let p = pos e_ast in
 		begin match ctx.com.display.dms_kind with
 		| DMSignature ->
-			raise_signatures [(convert_function_signature ctx PMap.empty (arg,ret),doc)] 0 0 SKCall
+			DisplayException.send_signatures_raise ctx.com [(convert_function_signature ctx PMap.empty (arg,ret),doc)] 0 0 SKCall
 		| DMHover ->
 			let t = TFun(arg,ret) in
 			raise_hover (make_ci_expr (mk (TIdent "trace") t p) (tpair t)) (Some (WithType.named_argument "value")) p
 		| DMDefinition | DMTypeDefinition ->
-			raise_positions []
+			DisplayException.send_positions_raise ctx.com []
 		| _ ->
 			raise_typing_error "Unsupported method" p
 		end

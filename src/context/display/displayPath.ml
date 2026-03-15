@@ -162,7 +162,7 @@ end
 let resolve_position_by_path ctx path p =
 	let mt = ctx.g.do_load_type_def ctx p path in
 	let p = (t_infos mt).mt_pos in
-	raise_positions [p]
+	DisplayException.send_positions_raise ctx.com [p]
 
 let handle_path_display ctx path p =
 	let class_field c name =
@@ -190,7 +190,7 @@ let handle_path_display ctx path p =
 			   which might not even exist anyway. *)
 			let mt = ctx.g.do_load_module ctx (sl,s) p in
 			let p = file_pos (Path.UniqueKey.lazy_path mt.m_extra.m_file) in
-			raise_positions [p]
+			DisplayException.send_positions_raise ctx.com [p]
 		| (IDKModule(sl,s),_),DMHover ->
 			let m = ctx.g.do_load_module ctx (sl,s) p in
 			begin try

@@ -44,7 +44,7 @@ let parse_file_from_lexbuf com file p lexbuf =
 		| DMModuleSymbols (Some ""),_ -> ()
 		| DMModuleSymbols filter,(ParseSuccess(data,_)) when filter = None && DisplayPosition.display_position#is_in_file (com.part_scope.file_keys#get file) ->
 			let ds = DocumentSymbols.collect_module_symbols None (filter = None) data in
-			DisplayException.raise_module_symbols (DocumentSymbols.Printer.json_of_module_symbols com [file,ds] filter);
+			DisplayException.send_module_symbols_raise com (DocumentSymbols.Printer.json_of_module_symbols com [file,ds] filter);
 		| _,ParseSuccess(_,({pd_was_display_file = true} as pdi)) ->
 			if pdi.pd_had_resume then
 				com.part_scope.parser_state.had_parser_resume <- true;
@@ -173,7 +173,7 @@ module ConditionDisplay = struct
 				| ECall ((EConst (Ident "version"),p),_)  ->
 					let t = TFun ([("s",false,com.basic.tstring)],t_semver) in
 					if check_position p then
-						DisplayException.raise_hover (CompletionItem.make_ci_class_field {
+						DisplayException.send_hover_raise com (CompletionItem.make_ci_class_field {
 							field = {
 								cf_name = "version";
 								cf_type = t;
@@ -206,7 +206,7 @@ so it should be avoided if backwards-compatibility with earlier versions is need
 						} (tpair t)) None p
 				| EConst(Ident(n)) ->
 					let v = eval com.defines (e,p) in
-					DisplayException.raise_hover (CompletionItem.make_ci_define n (match v with
+					DisplayException.send_hover_raise com (CompletionItem.make_ci_define n (match v with
 						| TNull -> None
 						| TString s -> Some (StringHelper.s_escape s)
 						| _ -> die "" __LOC__
@@ -220,7 +220,7 @@ so it should be avoided if backwards-compatibility with earlier versions is need
 			if check_position p then
 				let v = eval com.defines (e,p) in
 				let s,t = convert_small_type com v in
-				DisplayException.raise_hover (CompletionItem.make_ci_literal s (tpair t)) None p
+				DisplayException.send_hover_raise com (CompletionItem.make_ci_literal s (tpair t)) None p
 		in
 		loop e;
 end
@@ -247,7 +247,7 @@ module PdiHandler = struct
 					raise DisplayInMacroBlock;
 				begin match com.display.dms_kind with
 				| DMHover ->
-					raise (DisplayException.DisplayException(DisplayNoResult))
+					DisplayException.send_no_result_raise com
 				| _ ->
 					()
 				end;

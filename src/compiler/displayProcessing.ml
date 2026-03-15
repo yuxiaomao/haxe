@@ -76,7 +76,7 @@ let process_display_file com actx =
 				let real = Path.get_real_path (Path.UniqueKey.to_string file_key) in
 				let dpk = match get_module_path_from_file_path com real with
 				| Some path ->
-					if com.display.dms_kind = DMPackage then DisplayException.raise_package (fst path);
+					if com.display.dms_kind = DMPackage then DisplayException.send_package_raise com (fst path);
 					let dpk = match ExtString.String.nsplit (snd path) "." with
 						| [name;"macro"] ->
 							(* If we have a .macro.hx path, don't add the file to classes because the compiler won't find it.
@@ -135,7 +135,7 @@ let load_display_module_in_macro tctx display_file_dot_path clear = match displa
 			let _ = MacroContext.load_macro_module (MacroContext.get_macro_context tctx) tctx.com cpath true p in
 			Finalization.finalize mctx;
 			Some mctx
-		with DisplayException.DisplayException _ | Parser.TypePath _ as exc ->
+		with DisplayException.DisplayException _ | Parser.TypePath _ | DisplayJson.JsonCompleted as exc ->
 			raise exc
 		| _ ->
 			None
@@ -204,7 +204,7 @@ let handle_display_after_typing com tctx display_file_dot_path =
 		(* If we didn't find a completion point, load the display file in macro mode. *)
 		if com.part_scope.parser_state.display_module_has_macro_defines then
 			ignore(load_display_module_in_macro tctx display_file_dot_path true);
-		raise (DisplayException.DisplayException DisplayNoResult)
+		DisplayException.send_no_result_raise com
 		end
 	end else
 		false
@@ -248,7 +248,7 @@ let process_global_display_mode com tctx =
 					acc
 			) [] l
 		in
-		DisplayException.raise_module_symbols (DocumentSymbols.Printer.json_of_module_symbols com symbols filter)
+		DisplayException.send_module_symbols_raise com (DocumentSymbols.Printer.json_of_module_symbols com symbols filter)
 	| _ -> ()
 
 let handle_display_after_finalization com tctx display_file_dot_path =

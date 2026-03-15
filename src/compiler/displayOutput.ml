@@ -53,20 +53,10 @@ let handle_syntax_completion com kind subj =
 
 let handle_display_exception_json com dex rh =
 	match dex with
-	| DisplayHover _ | DisplayPositions _ | DisplayFields _ | DisplayPackage _  | DisplaySignatures _ ->
+	| DisplayHover _ | DisplayFields _ ->
 		DisplayPosition.display_position#reset;
 		let ctx = DisplayJson.create_json_context (match dex with DisplayFields _ -> true | _ -> false) in
 		CompilerOutput.send_result_raise rh (DisplayException.to_json ctx dex)
-	| DisplayNoResult ->
-		(match com.display.dms_kind with
-			| DMDefault -> CompilerOutput.send_error_raise rh [jstring "No completion point"]
-			| _ -> CompilerOutput.send_result_raise rh JNull
-		)
-	| ModuleSymbols json ->
-		DisplayPosition.display_position#reset;
-		CompilerOutput.send_result_raise rh json
-	| Metadata _ ->
-		die "Unexpected Metadata display exception" __LOC__
 
 let handle_display_exception com dex =
 	handle_display_exception_json com dex com.request_scope.result_handler
