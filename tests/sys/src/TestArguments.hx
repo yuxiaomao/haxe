@@ -78,7 +78,9 @@ class TestArguments extends utest.Test {
 			"bin/hl/TestArguments.hl";
 		#end
 	#elseif cpp
-		#if debug
+		#if cppia
+			"bin/cppia/TestArguments.cppia";
+		#elseif debug
 			"bin/cpp/TestArguments-debug";
 		#else
 			"bin/cpp/TestArguments";
@@ -98,7 +100,11 @@ class TestArguments extends utest.Test {
 	#end
 
 	function testArgs() {
-		var args = Sys.args();
+		final args = Sys.args();
+		#if cppia
+		args.shift();
+		args.remove("-jit");
+		#end
 		for (i in 0...expectedArgs.length) {
 			Assert.equals(expectedArgs[i], args[i]);
 		}
