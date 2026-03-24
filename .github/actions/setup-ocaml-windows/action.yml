@@ -1,4 +1,5 @@
 name: Setup Ocaml Windows
+description: Sets up ocaml on Windows
 runs:
   using: composite
   steps:
@@ -16,7 +17,7 @@ runs:
     run: |
       curl.exe -fsSL -o "libmbedtls.tar.xz" --retry 3 `
         https://github.com/Simn/mingw64-mbedtls/releases/download/${{ env.MBEDTLS_VERSION }}/mingw64-${{ env.MINGW_ARCH }}-mbedtls-${{ env.MBEDTLS_VERSION }}-1-noarch.tar.xz
-      ${{ env.CYG_ROOT }}\bin\tar.exe -C ${{ env.CYG_ROOT }} -xvf libmbedtls.tar.xz
+      opam exec -- tar -C / -xvf libmbedtls.tar.xz
 
   - name: Install OCaml libraries
     uses: nick-fields/retry@v3
