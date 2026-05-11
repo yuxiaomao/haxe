@@ -26,7 +26,7 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: repolevedavaj/install-nsis@v1.1.0
+      - uses: repolevedavaj/install-nsis@v1.2.0
         with:
           nsis-version: '3.10'
 
@@ -225,6 +225,17 @@ jobs:
         if: matrix.target == 'lua'
         with:
           key-prefix: lua-env-linux-${{ matrix.arch }}
+
+      - name: Download d8 (Android build-tools)
+        if: matrix.target == 'jvm'
+        run: |
+          set -ex
+          curl -fsSLo /tmp/build-tools.zip https://dl.google.com/android/repository/build-tools_r34-linux.zip
+          mkdir -p "$HOME/d8"
+          unzip -q /tmp/build-tools.zip -d "$HOME/d8"
+          d8=$(find "$HOME/d8" -name d8 -type f -executable | head -n1)
+          test -x "$d8"
+          echo "D8=$d8" >> "$GITHUB_ENV"
 
       - name: Test
         run: haxe --run RunCi ${{ matrix.target }} ${{ matrix.runci-args }}
