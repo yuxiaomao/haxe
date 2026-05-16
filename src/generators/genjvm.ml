@@ -3201,19 +3201,7 @@ module Preprocessor = struct
 			mt.mt_path <- make_root mt.mt_path
 
 	let check_functional_interface gctx c =
-		let rec loop m l = match l with
-			| [] ->
-				m
-			| cf :: l ->
-				if not (has_class_field_flag cf CfDefault) then begin match m with
-					| None ->
-						loop (Some cf) l
-					| Some _ ->
-						None
-				end else
-					loop m l
-		in
-		match loop None c.cl_ordered_fields with
+		match TClass.get_singular_interface_field c.cl_ordered_fields with
 		| None ->
 			()
 		| Some cf ->
@@ -3224,6 +3212,57 @@ module Preprocessor = struct
 			| _ ->
 				()
 
+	(* Collect the functional interfaces actually referenced by user code, so
+	   closures only implement SAMs the program demands. Without this filter a
+	   closure would bind to every structurally-matching interface on the
+	   --java-lib classpath — including incidental ones from a higher API level
+	   than the runtime, which hard-fails class linking. An interface counts as
+	   used iff some non-extern type, field signature, or sub-expression names
+	   it; scanning non-extern code only keeps classpath noise out. *)
+	let collect_used_functional_interfaces gctx =
+		let used = Hashtbl.create 0 in
+		let rec note_fi_in_type depth t =
+			if depth < 32 then match follow t with
+			| TInst(c,tl) ->
+				if has_class_flag c CFunctionalInterface then Hashtbl.replace used c.cl_path ();
+				List.iter (note_fi_in_type (depth + 1)) tl
+			| TFun(args,ret) ->
+				List.iter (fun (_,_,t) -> note_fi_in_type (depth + 1) t) args;
+				note_fi_in_type (depth + 1) ret
+			| TAbstract(_,tl) | TEnum(_,tl) | TType(_,tl) ->
+				List.iter (note_fi_in_type (depth + 1)) tl
+			| TAnon an ->
+				PMap.iter (fun _ cf -> note_fi_in_type (depth + 1) cf.cf_type) an.a_fields
+			| TDynamic (Some t) ->
+				note_fi_in_type (depth + 1) t
+			| _ ->
+				()
+		in
+		let rec note_fi_in_expr e =
+			note_fi_in_type 0 e.etype;
+			Type.iter note_fi_in_expr e
+		in
+		let scan_class c =
+			if not (has_class_flag c CExtern) then begin
+				let rec scan cf =
+					note_fi_in_type 0 cf.cf_type;
+					Option.may note_fi_in_expr cf.cf_expr;
+					List.iter scan cf.cf_overloads
+				in
+				List.iter scan c.cl_ordered_fields;
+				List.iter scan c.cl_ordered_statics;
+				Option.may scan c.cl_constructor
+			end
+		in
+		(* go through com.modules so we can also pick up private typedefs *)
+		List.iter (fun m ->
+			List.iter (fun mt -> match mt with
+				| TClassDecl c -> scan_class c
+				| _ -> ()
+			) m.m_types
+		) gctx.gctx.modules;
+		used
+
 	let preprocess gctx =
 		let rec has_runtime_meta = function
 			| (Meta.Custom s,_,_) :: _ when String.length s > 0 && s.[0] <> ':' ->
@@ -3233,7 +3272,6 @@ module Preprocessor = struct
 			| [] ->
 				false
 		in
-		(* go through com.modules so we can also pick up private typedefs *)
 		List.iter (fun m ->
 			List.iter (fun mt ->
 				match mt with
@@ -3251,6 +3289,9 @@ module Preprocessor = struct
 					()
 			) m.m_types
 		) gctx.gctx.modules;
+		(* After check_path: cl_paths are stable, so we can key the used-SAM
+		   set by cl_path without worrying about private-type rewrites. *)
+		let fi_used = collect_used_functional_interfaces gctx in
 		(* preprocess classes *)
 		let patch_optional c =
 			let apply cf =
@@ -3267,8 +3308,8 @@ module Preprocessor = struct
 					gctx.preprocessor#preprocess_class c
 				else begin
 					patch_optional c;
-					if has_class_flag c CFunctionalInterface then
-					check_functional_interface gctx c
+					if Hashtbl.mem fi_used c.cl_path then
+						check_functional_interface gctx c
 				end
 			| _ -> ()
 		) gctx.gctx.types;
