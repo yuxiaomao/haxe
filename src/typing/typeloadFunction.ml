@@ -233,7 +233,9 @@ let add_constructor ctx_c c force_constructor p =
 							in
 							map_arg (alloc_var (VUser TVOArgument) n (if o then ctx.t.tnull t else t) p,def) (* TODO: var pos *)
 						) args
-					| _ -> die "" __LOC__
+					| t ->
+						display_error ctx_c.com (Printf.sprintf "Unexpected constructor type: %s" (s_type_kind t)) cfsup.cf_name_pos;
+						[]
 			) in
 			let p = c.cl_pos in
 			let vars = List.map (fun (v,def) -> alloc_var (VUser TVOArgument) v.v_name (apply_params csup.cl_params cparams v.v_type) v.v_pos, def) args in
