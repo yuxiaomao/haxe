@@ -708,47 +708,6 @@ object(self)
 			end
 end
 
-(*
-	After inlining or generic substitution, [Type.map_expr_type] has re-resolved
-	TField nodes by name through [quick_field], which collapses an overloaded
-	method to its first declared overload while leaving the field's applied type
-	untouched. This restores the correct overload on such call nodes (other nodes
-	are returned unchanged - hence [maybe_]).
-
-	The matching overload is re-selected structurally from the (already mapped)
-	argument types and just the field reference is restored, which is what code
-	generation relies on. This needs no typer: the arguments are already typed,
-	so [OverloadResolution] only unifies their types against each candidate.
-*)
-let maybe_reapply_overload_call e =
-	match e.eexpr with
-		| TCall({eexpr = TField(e1,fa)} as ef,el) ->
-			let rebuild cf' =
-				let fa = match fa with
-					| FInstance(c,tl,_) -> FInstance(c,tl,cf')
-					| FStatic(c,_) -> FStatic(c,cf')
-					| _ -> fa
-				in
-				{e with eexpr = TCall({ef with eexpr = TField(e1,fa)},el)}
-			in
-			begin match fa with
-			| FStatic(c,cf) when has_class_field_flag cf CfOverload ->
-				begin match OverloadResolution.filter_overloads (OverloadResolution.find_overload (fun t -> t) c cf el) with
-				| Some(_,cf',_) -> rebuild cf'
-				| None -> e
-				end
-			| FInstance(c,tl,cf) when has_class_field_flag cf CfOverload ->
-				let map_type = apply_params c.cl_params tl in
-				begin match OverloadResolution.resolve_instance_overload false map_type c cf.cf_name el with
-				| Some(_,cf',_) -> rebuild cf'
-				| None -> e
-				end
-			| _ ->
-				e
-			end
-		| _ ->
-			e
-
 let make_static_call_better ctx c cf tl el t p =
 	let fh = match c.cl_kind with
 		| KAbstractImpl a when has_class_field_flag cf CfImpl ->
