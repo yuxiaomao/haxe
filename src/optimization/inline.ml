@@ -5,7 +5,7 @@ open OptimizerTexpr
 open Typecore
 open Error
 
-let maybe_reapply_overload_call_ref = ref (fun (_ : typer option) (_ : texpr) -> assert false)
+let maybe_reapply_overload_call_ref = ref (fun (_ : texpr) -> assert false)
 
 let mk_untyped_call name p params =
 	{
@@ -610,7 +610,7 @@ object(self)
 			| _ -> unify_func());
 		end;
 		let vars = Hashtbl.create 0 in
-		let maybe_reapply_overload_call = !maybe_reapply_overload_call_ref ictx.typer in
+		let maybe_reapply_overload_call = !maybe_reapply_overload_call_ref in
 		let rec map_var map_type v =
 			if not (Hashtbl.mem vars v.v_id) then begin
 				Hashtbl.add vars v.v_id ();

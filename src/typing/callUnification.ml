@@ -709,63 +709,42 @@ object(self)
 end
 
 (*
-	After inlining, [Type.map_expr_type] has re-resolved TField nodes by name
-	through [quick_field], which collapses an overloaded method to its first
-	declared overload while leaving the field's applied type untouched. This
-	restores the correct overload on such call nodes (other nodes are returned
-	unchanged - hence [maybe_]).
+	After inlining or generic substitution, [Type.map_expr_type] has re-resolved
+	TField nodes by name through [quick_field], which collapses an overloaded
+	method to its first declared overload while leaving the field's applied type
+	untouched. This restores the correct overload on such call nodes (other nodes
+	are returned unchanged - hence [maybe_]).
 
-	With a typer available we re-type the call precisely through
-	[unify_field_call]. Without one (e.g. the optimizer's self-calling-closure
-	inlining) we re-select the matching overload structurally from the (already
-	mapped) argument types and restore just the field reference, which is what
-	code generation relies on.
+	The matching overload is re-selected structurally from the (already mapped)
+	argument types and just the field reference is restored, which is what code
+	generation relies on. This needs no typer: the arguments are already typed,
+	so [OverloadResolution] only unifies their types against each candidate.
 *)
-let maybe_reapply_overload_call ctxo e =
+let maybe_reapply_overload_call e =
 	match e.eexpr with
 		| TCall({eexpr = TField(e1,fa)} as ef,el) ->
-			begin match ctxo with
-			| Some ctx ->
-				let recall fh cf =
-					let fa = FieldAccess.create e1 cf fh false ef.epos in
-					let fcc = unify_field_call ctx fa el [] e.epos false in
-					let e1 = fcc.fc_data() in
-					(try Type.unify e1.etype e.etype
-					with Unify_error _ -> die ~p:e.epos "Failed to reapply overload call" __LOC__);
-					e1
+			let rebuild cf' =
+				let fa = match fa with
+					| FInstance(c,tl,_) -> FInstance(c,tl,cf')
+					| FStatic(c,_) -> FStatic(c,cf')
+					| _ -> fa
 				in
-				begin match fa with
-				| FStatic(c,cf) when has_class_field_flag cf CfOverload ->
-					recall (FHStatic c) cf
-				| FInstance(c,tl,cf) when has_class_field_flag cf CfOverload ->
-					recall (FHInstance(c,tl)) cf
-				| _ ->
-					e
+				{e with eexpr = TCall({ef with eexpr = TField(e1,fa)},el)}
+			in
+			begin match fa with
+			| FStatic(c,cf) when has_class_field_flag cf CfOverload ->
+				begin match OverloadResolution.filter_overloads (OverloadResolution.find_overload (fun t -> t) c cf el) with
+				| Some(_,cf',_) -> rebuild cf'
+				| None -> e
 				end
-			| None ->
-				let rebuild cf' =
-					let fa = match fa with
-						| FInstance(c,tl,_) -> FInstance(c,tl,cf')
-						| FStatic(c,_) -> FStatic(c,cf')
-						| _ -> fa
-					in
-					{e with eexpr = TCall({ef with eexpr = TField(e1,fa)},el)}
-				in
-				begin match fa with
-				| FStatic(c,cf) when has_class_field_flag cf CfOverload ->
-					begin match OverloadResolution.filter_overloads (OverloadResolution.find_overload (fun t -> t) c cf el) with
-					| Some(_,cf',_) -> rebuild cf'
-					| None -> e
-					end
-				| FInstance(c,tl,cf) when has_class_field_flag cf CfOverload ->
-					let map_type = apply_params c.cl_params tl in
-					begin match OverloadResolution.resolve_instance_overload false map_type c cf.cf_name el with
-					| Some(_,cf',_) -> rebuild cf'
-					| None -> e
-					end
-				| _ ->
-					e
+			| FInstance(c,tl,cf) when has_class_field_flag cf CfOverload ->
+				let map_type = apply_params c.cl_params tl in
+				begin match OverloadResolution.resolve_instance_overload false map_type c cf.cf_name el with
+				| Some(_,cf',_) -> rebuild cf'
+				| None -> e
 				end
+			| _ ->
+				e
 			end
 		| _ ->
 			e
