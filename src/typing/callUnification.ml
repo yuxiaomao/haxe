@@ -192,7 +192,7 @@ type overload_kind =
 	Returns a tuple of a part of `args` covered by `el_typed`, and a part of `args`
 	not used for `el_typed` unification.
 *)
-let unify_typed_args ctx tmap args el_typed call_pos =
+let unify_typed_args tmap args el_typed call_pos =
 	let rec loop acc_args tmap args el =
 		match args,el with
 		| [], _ :: _ ->
@@ -211,18 +211,18 @@ let unify_typed_args ctx tmap args el_typed call_pos =
 	in
 	loop [] tmap args el_typed
 
-let ensure_coro_availability ctx =
+let ensure_coro_availability com =
 	(* In cases where we never actually built a coro state machine, the SuspensionResult structure might
 	   not have been initialized yet. This would normally be handled via the pass flushing in `load_module`,
 	   but because all coro data is loaded from a `build-module` pass, this doesn't trigger in time. *)
-	ignore ((AtomicLazy.force ctx.com.basic.tcoro.suspension_result_class).cl_build())
+	ignore ((AtomicLazy.force com.basic.tcoro.suspension_result_class).cl_build())
 
 (* Wrap a coroutine call expression from a non-coroutine context with a `.resolveTo(cont)` call.
    This ensures that if the coroutine completes synchronously, its result or error is propagated
    to the continuation immediately. If the continuation expression `econt` is not pure (e.g. a
    constructor call), a temp var is introduced to avoid evaluating it twice. *)
-let wrap_with_resolve_to ctx ecall econt p =
-	let basic = ctx.com.basic in
+let wrap_with_resolve_to com ecall econt p =
+	let basic = com.basic in
 	let b = new CoroElsewhere.texpr_builder basic p in
 	let suspension_result_class = AtomicLazy.force basic.tcoro.suspension_result_class in
 	let t_param = match follow ecall.etype with TInst(_, [t]) -> t | _ -> die "Expected SuspensionResult with one type parameter for coroutine call result" __LOC__ in
@@ -327,7 +327,7 @@ let unify_field_call ctx fa el_typed el p inline =
 		let monos = Monomorph.spawn_constrained_monos map cf.cf_params in
 		let t = map (apply_params cf.cf_params monos cf.cf_type) in
 		let make args ret coro =
-			let args_typed,args = unify_typed_args ctx tmap args el_typed p in
+			let args_typed,args = unify_typed_args tmap args el_typed p in
 			let el =
 				try
 					unify_call_args ctx el args ret ?call_field_p:fa.fa_field_pos p inline is_forced_inline in_overload
@@ -347,13 +347,13 @@ let unify_field_call ctx fa el_typed el p inline =
 		match follow_with_coro t with
 		| Coro(args,ret) when not (TyperManager.is_coroutine_context ctx) ->
 			let args, ret = expand_coro_type ctx.com.basic args ret in
-			ensure_coro_availability ctx;
+			ensure_coro_availability ctx.com;
 			let fcc = make args ret false in
 			begin match fcc with
 				| { fc_args = econt :: _; fc_data = (original_mk_call,_) } ->
 					let wrapped_mk_call () =
 						let ecall = original_mk_call () in
-						wrap_with_resolve_to ctx ecall econt p
+						wrap_with_resolve_to ctx.com ecall econt p
 					in
 					{ fcc with fc_data = (wrapped_mk_call, snd fcc.fc_data) }
 				| _ ->
@@ -608,7 +608,7 @@ object(self)
 			mk (TCall (e,el)) t p
 		in
 		let make args ret =
-			let args_typed,args_left = unify_typed_args ctx (fun t -> t) args el_typed p in
+			let args_typed,args_left = unify_typed_args (fun t -> t) args el_typed p in
 			let el = unify_call_args ctx el args_left ret p false false false in
 			let el = el_typed @ el in
 			mk (TCall (e,el)) ret p
@@ -616,10 +616,10 @@ object(self)
 		let rec loop t = match follow_with_coro t with
 		| Coro(args,ret) when not (TyperManager.is_coroutine_context ctx) ->
 			let args, ret = expand_coro_type ctx.com.basic args ret in
-			ensure_coro_availability ctx;
+			ensure_coro_availability ctx.com;
 			let ecall = make args ret in
 			let econt = (match ecall.eexpr with TCall(_, econt :: _) -> econt | _ -> die "Expected TCall with at least one argument (continuation)" __LOC__) in
-			wrap_with_resolve_to ctx ecall econt p
+			wrap_with_resolve_to ctx.com ecall econt p
 		| Coro(args,ret) ->
 			make args ret
 		| NotCoro(TFun(args,ret)) ->
