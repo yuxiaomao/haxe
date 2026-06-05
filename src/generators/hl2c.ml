@@ -1760,6 +1760,11 @@ let write_c com file (code:code) gnames num_domains =
 	) all_types;
 
 	line "";
+	line "#ifndef HL_DUMP_TYPES";
+	line "HL_API void hl_sys_print(vbyte*);";
+	line "#endif";
+
+	line "";
 	line "static void dump_types( void (*fdump)( void *, int) ) {";
 	block ctx;
 	line "#ifdef HL_DUMP_TYPES";
@@ -1782,7 +1787,7 @@ let write_c com file (code:code) gnames num_domains =
 		| _ -> ()
 	) all_types;
 	line "#else";
-	sexpr "printf(\"dump_types not available, please compile with HL_DUMP_TYPES defined\\n\")";
+	sexpr "hl_sys_print((vbyte*)USTR(\"dump_types not available, please compile with HL_DUMP_TYPES defined\\n\"))";
 	line "#endif";
 	unblock ctx;
 	line "}";
