@@ -152,30 +152,39 @@ let unify_call_args ctx el args r callp ?(call_field_p=callp) inline force_inlin
 			end
 		| e :: el,(name,opt,t) :: args ->
 			let might_skip = List.length el < List.length args in
+			let body_capture = reset_call_arg_body_capture ctx in
+			let restore_monos = monomorph_transaction ctx in
+			let committed = ref false in
+			let commit () = if not !committed then begin committed := true; commit_captured_messages ctx.com !body_capture end in
+			let drop () = committed := true in
 			begin try
-				let e = type_against name t e in
-				e :: loop el args
-			with
-				WithTypeError ul ->
-					if opt && might_skip then begin
-						let e_def = skip name ul t in
-						e_def :: loop (e :: el) args
-					end else
-						match List.rev !skipped with
-						| [] -> arg_error ul name opt
-						| (s,ul) :: _ -> arg_error ul s true
+				begin try
+					let e = type_against name t e in
+					commit ();
+					e :: loop el args
+				with
+					| WithTypeError ul when opt && might_skip ->
+							drop ();
+							restore_monos();
+							let e_def = skip name ul t in
+							e_def :: loop (e :: el) args
+					| WithTypeError _ when !body_capture <> [] && (match follow t with TFun _ -> false | _ -> true) ->
+							commit ();
+							restore_monos();
+							let e_def = default_value name t in
+							e_def :: loop el args
+					| WithTypeError ul ->
+							commit ();
+							match List.rev !skipped with
+							| [] -> arg_error ul name opt
+							| (s,ul) :: _ -> arg_error ul s true
+				end
+			with exc ->
+				commit ();
+				raise exc
 			end
 	in
-	let restore =
-		let in_call_args = ctx.f.in_call_args in
-		let in_overload_call_args = ctx.f.in_overload_call_args in
-		ctx.f.in_call_args <- true;
-		ctx.f.in_overload_call_args <- in_overload;
-		(fun () ->
-			ctx.f.in_call_args <- in_call_args;
-			ctx.f.in_overload_call_args <- in_overload_call_args;
-		)
-	in
+	let restore = enter_call_args ctx ~in_overload in
 	let el = try loop el args with exc -> restore(); raise exc; in
 	restore();
 	el
@@ -279,7 +288,7 @@ let unify_field_call ctx fa el_typed el p inline =
 		else if fa.fa_field.cf_overloads <> [] then OverloadMeta
 		else OverloadNone
 	in
-	(* Delayed display handling works like this: If ctx.e.in_overload_call_args is set (via attempt_calls calling unify_call_args' below),
+	(* Delayed display handling works like this: If in_overload_call_args is set (via attempt_calls calling unify_call_args' below),
 	   the code which normally raises eager Display exceptions (in typerDisplay.ml handle_display) instead stores them in ctx.g.delayed_display.
 	   The overload handling here extracts them and associates the exception with the field call candidates. Afterwards, normal overload resolution
 	   can take place and only then the display callback is actually committed.

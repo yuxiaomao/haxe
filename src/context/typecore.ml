@@ -95,6 +95,11 @@ type function_mode =
 	| FunCoroutine
 	| FunNotFunction
 
+type call_arg_context = {
+	cac_in_overload : bool;
+	mutable cac_body_capture : Message.t list ref;
+}
+
 type typer_globals = {
 	mutable delayed : typer_pass_tasks Array.t;
 	mutable delayed_min_index : int;
@@ -112,6 +117,7 @@ type typer_globals = {
 	mutable build_count : int;
 	mutable t_dynamic_def : Type.t;
 	mutable delayed_display : DisplayTypes.display_exception_kind option;
+	mutable call_arg_context : call_arg_context option;
 	root_typer : typer;
 	(* api *)
 	mutable continuation_api : ContTypes.continuation_api option;
@@ -147,7 +153,6 @@ and typer_field = {
 	mutable meta : metadata;
 	mutable in_display : bool;
 	mutable in_call_args : bool;
-	mutable in_overload_call_args : bool;
 }
 
 and typer = {
@@ -217,7 +222,6 @@ module TyperManager = struct
 			untyped = false;
 			meta = [];
 			in_display = false;
-			in_overload_call_args = false;
 			in_call_args = false;
 		}
 
@@ -387,9 +391,42 @@ let spawn_monomorph' ctx p =
 let spawn_monomorph ctx p =
 	TMono (spawn_monomorph' ctx p)
 
+let monomorph_transaction ctx =
+	let known = List.map (fun (m,_) -> m,m.tm_type,m.tm_down_constraints) ctx.e.monomorphs in
+	let current = ctx.e.monomorphs in
+	(fun () ->
+		List.iter (fun (m,t,constr) ->
+			if t != m.tm_type then m.tm_type <- t;
+			if constr != m.tm_down_constraints then m.tm_down_constraints <- constr;
+		) known;
+		ctx.e.monomorphs <- current
+	)
+
 let make_static_field_access c cf t p =
 	let ethis = Texpr.Builder.make_static_this c p in
 	mk (TField (ethis,(FStatic (c,cf)))) t p
+
+let enter_call_args ctx ~in_overload =
+	let old_in_call_args = ctx.f.in_call_args in
+	let old_context = ctx.g.call_arg_context in
+	ctx.f.in_call_args <- true;
+	ctx.g.call_arg_context <- Some { cac_in_overload = in_overload; cac_body_capture = ref [] };
+	(fun () ->
+		ctx.f.in_call_args <- old_in_call_args;
+		ctx.g.call_arg_context <- old_context;
+	)
+
+let in_overload_call_args ctx = match ctx.g.call_arg_context with
+	| Some cac -> cac.cac_in_overload
+	| None -> false
+
+let reset_call_arg_body_capture ctx = match ctx.g.call_arg_context with
+	| Some cac -> let buf = ref [] in cac.cac_body_capture <- buf; buf
+	| None -> ref []
+
+let call_arg_body_capture ctx = match ctx.g.call_arg_context with
+	| Some cac -> Some cac.cac_body_capture
+	| None -> None
 
 let raise_with_type_error msg p =
 	raise (WithTypeError (make_error (Custom msg) p))
