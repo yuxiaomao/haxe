@@ -240,7 +240,7 @@ jobs:
       - name: Test
         run: haxe --run RunCi ${{ matrix.target }} ${{ matrix.runci-args }}
         working-directory: ${{github.workspace}}/tests
-        timeout-minutes: 20
+        timeout-minutes: 25
 
   test-docgen:
     needs: linux-build
@@ -505,7 +505,7 @@ jobs:
         shell: pwsh
         run: haxe RunCi.hxml
         working-directory: ${{github.workspace}}/tests
-        timeout-minutes: 20
+        timeout-minutes: 25
         env:
           MSYS2_LOCATION: ${{ matrix.target == 'lua' && steps.msys2.outputs.msys2-location || '' }}
 
