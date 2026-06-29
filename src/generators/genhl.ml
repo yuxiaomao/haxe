@@ -26,13 +26,6 @@ open Type
 open Error
 open Gctx
 open Hlcode
-open Tanon_identification
-
-let anon_id_uctx = {
-	AnonIdMode.strict with
-	allow_optional_mismatch = true;
-	opaque_field_params = true;
-}
 
 (* compiler *)
 
@@ -112,8 +105,7 @@ type context = {
 	defined_funs : (int,unit) Hashtbl.t;
 	mutable cached_types : (string list, ttype) PMap.t;
 	mutable m : method_context;
-	anon_id : ttype tanon_identification;
-	anons_cache : (path, ttype) Hashtbl.t;
+	mutable anons_cache : (tanon, ttype) PMap.t;
 	mutable method_wrappers : ((ttype * ttype), int) PMap.t;
 	mutable rec_cache : (Type.t * ttype option ref) list;
 	mutable cached_tuples : (ttype list, ttype) PMap.t;
@@ -249,7 +241,7 @@ let method_context id t captured hasthis =
 		mregs = new_lookup();
 		mops = DynArray.create();
 		mvars = Hashtbl.create 0;
-		mallocs = PMap.create ttype_compare;
+		mallocs = PMap.empty;
 		mret = t;
 		mbreaks = [];
 		mdeclared = [];
@@ -425,8 +417,11 @@ let rec to_type ?tref ctx t =
 		| _ -> die "" __LOC__)
 	| TAnon a ->
 		if PMap.is_empty a.a_fields then HDyn else
-		let pfm = ctx.anon_id#identify_anon anon_id_uctx a in
-		(try Hashtbl.find ctx.anons_cache pfm.pfm_path with Not_found ->
+		(try
+			(* can't use physical comparison in PMap since addresses might change in GC compact,
+				maybe add an uid to tanon if too slow ? *)
+			PMap.find a ctx.anons_cache
+		with Not_found ->
 			let vp = {
 				vfields = [||];
 				vindex = PMap.empty;
@@ -435,7 +430,7 @@ let rec to_type ?tref ctx t =
 			(match tref with
 			| None -> ()
 			| Some r -> r := Some t);
-			Hashtbl.add ctx.anons_cache pfm.pfm_path t;
+			ctx.anons_cache <- PMap.add a t ctx.anons_cache;
 			let fields = PMap.fold (fun cf acc -> cfield_type ctx cf :: acc) a.a_fields [] in
 			let fields = List.sort (fun (n1,_,_) (n2,_,_) -> compare n1 n2) fields in
 			vp.vfields <- Array.of_list fields;
@@ -4205,7 +4200,7 @@ let create_context com =
 		cfunctions = DynArray.create();
 		overrides = Hashtbl.create 0;
 		cached_types = PMap.empty;
-		cached_tuples = PMap.create ttype_list_compare;
+		cached_tuples = PMap.empty;
 		cfids = new_lookup();
 		defined_funs = Hashtbl.create 0;
 		tstring = HVoid;
@@ -4240,10 +4235,9 @@ let create_context com =
 		core_type = get_class "CoreType";
 		core_enum = get_class "CoreEnum";
 		ref_abstract = get_abstract "Ref";
-		anon_id = new tanon_identification;
-		anons_cache = Hashtbl.create 0;
+		anons_cache = PMap.empty;
 		rec_cache = [];
-		method_wrappers = PMap.create ttype_pair_compare;
+		method_wrappers = PMap.empty;
 		cdebug_files = new_lookup();
 		macro_typedefs = Hashtbl.create 0;
 		ct_delayed = [];
