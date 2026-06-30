@@ -11,9 +11,7 @@ class EntryPoint {
 		#if js
 			var nextTick = haxe.EventLoop.main.getNextTick();
 			inline function setTimeoutNextTick() {
-				if (nextTick >= 0) {
-					(untyped setTimeout)(run, nextTick * 1000);
-				}
+				(untyped setTimeout)(run, (nextTick < 0 ? 0 : nextTick * 1000));
 			}
 			#if nodejs
 			setTimeoutNextTick();
