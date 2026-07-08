@@ -157,6 +157,12 @@ class ThreadCallbackManager {
 	}
 
 	static function iterateCallbacks<F>(callbacks:Array<ThreadCallback<F>>, f:ThreadCallback<F> -> Void) {
+		if( callbacks.length == 1 ) {
+			var c = callbacks[0];
+			if( !c.isClosed )
+				f(c);
+			return;
+		}
 		var firstException = null;
 		for (c in callbacks) {
 			if (!c.isClosed) {
