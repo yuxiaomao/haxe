@@ -831,9 +831,7 @@ let is_compilation com = com.display.dms_kind = DMNone && not (is_diagnostics co
     not prevent context caching. *)
 let has_error_to_report com =
 	let has_reportable_message = List.exists (fun cm ->
-		match cm.cm_diagnostics_kind with
-		| MessageKind.DKMissingFields | MessageKind.DKUnresolvedIdentifier -> false
-		| _ -> true
+		not (Message.cm_is_diagnostics_only cm)
 	) com.part_scope.messages in
 	com.part_scope.has_error && (is_compilation com || has_reportable_message)
 

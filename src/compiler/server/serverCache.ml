@@ -230,8 +230,21 @@ let check_module sctx com m_path m_extra p =
 				| Some reason -> raise (Dirty (DependencyDirty(mpath,reason)))
 			) m_extra.m_deps
 		in
+		(* Errors like missing fields are downgraded to diagnostics-only messages when typing in
+		   diagnostics mode. Such a module cannot be reused by an actual compilation, which has to
+		   type it again in order to produce the real error (#12995). *)
+		let check_diagnostics_only_errors () =
+			if not (is_diagnostics com) && DynArray.fold_left (fun acc cbo -> acc || match cbo with
+				| Message cm ->
+					Message.cm_is_diagnostics_only cm
+				| _ ->
+					false
+			) false m_extra.m_cache_bound_objects then
+				raise (Dirty (Tainted DiagnosticsOnlyErrors))
+		in
 		let check () =
 			try
+				check_diagnostics_only_errors();
 				check_module_path();
 				if not (has_policy NoFileSystemCheck) || Path.file_extension (Path.UniqueKey.lazy_path m_extra.m_file) <> "hx" then check_file();
 				if (get_typing_mode com m_extra) = FullTyping then check_dependencies();

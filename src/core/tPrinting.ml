@@ -651,6 +651,7 @@ module Printer = struct
 		| ServerInvalidate -> "server/invalidate"
 		| ServerInvalidateFiles -> "server_invalidate_files"
 		| ServerInvalidateModule -> "server_invalidate_module"
+		| DiagnosticsOnlyErrors -> "diagnostics_only_errors"
 
 	let s_module_skip_reason reason =
 		let rec loop stack = function
