@@ -621,6 +621,10 @@ let remap_fun ctx f dump get_str old_code =
 			loop p @ acc
 		) [] (Array.to_list !assigns) in
 		let new_assigns = List.sort (fun (_,p1,_) (_,p2,_) -> p1 - p2) (List.rev new_assigns) in
+		let seen = Hashtbl.create 0 in
+		let new_assigns = List.filter (fun a ->
+			if Hashtbl.mem seen a then false else begin Hashtbl.add seen a (); true end
+		) new_assigns in
 		assigns := Array.of_list new_assigns;
 	end;
 
