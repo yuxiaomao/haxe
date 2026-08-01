@@ -572,7 +572,7 @@ let remap_fun ctx f dump get_str old_code =
 			try Hashtbl.find ctx.r_blocks_pos p with Not_found -> resolve_block (p - 1)
 		in
 
-		let new_assigns = List.fold_left (fun acc (i,p) ->
+		let new_assigns = List.fold_left (fun acc (i,p,scope_end) ->
 			let gmap = Hashtbl.create 0 in
 			(*
 				For a given assign at position p, that's been optimized out,
@@ -580,10 +580,10 @@ let remap_fun ctx f dump get_str old_code =
 				is, and remap the variable name to it
 			*)
 			let rec loop p =
-				if p < 0 || (match op p with ONop _ -> false | _ -> true) then [(i,p)] else
+				if p < 0 || (match op p with ONop _ -> false | _ -> true) then [(i,p,scope_end)] else
 				let reg, last_w = try Hashtbl.find ctx.r_reg_moved p with Not_found -> (-1,-1) in
 				if reg < 0 then [] (* ? *) else
-				if reg < nargs then [(i,-reg-2)] else
+				if reg < nargs then [(i,-reg-2,-1)] else
 				let b = resolve_block p in
 				if last_w >= b.bstart && last_w < b.bend && last_w < p then loop last_w else
 				let wp = try PMap.find reg b.bwrite with Not_found -> -1 in
@@ -620,7 +620,7 @@ let remap_fun ctx f dump get_str old_code =
 			in
 			loop p @ acc
 		) [] (Array.to_list !assigns) in
-		let new_assigns = List.sort (fun (_,p1) (_,p2) -> p1 - p2) (List.rev new_assigns) in
+		let new_assigns = List.sort (fun (_,p1,_) (_,p2,_) -> p1 - p2) (List.rev new_assigns) in
 		assigns := Array.of_list new_assigns;
 	end;
 
@@ -628,8 +628,8 @@ let remap_fun ctx f dump get_str old_code =
 	if dump then begin
 		let old_assigns = Hashtbl.create 0 in
 		let new_assigns = Hashtbl.create 0 in
-		Array.iter (fun (var,pos) -> if pos >= 0 then Hashtbl.replace old_assigns pos var) f.assigns;
-		Array.iter (fun (var,pos) ->
+		Array.iter (fun (var,pos,_) -> if pos >= 0 then Hashtbl.replace old_assigns pos var) f.assigns;
+		Array.iter (fun (var,pos,_) ->
 			if pos >= 0 then begin
 				let f = try Hashtbl.find new_assigns pos with Not_found -> let v = ref [] in Hashtbl.add new_assigns pos v; v in
 				f := var :: !f;
@@ -665,8 +665,8 @@ let remap_fun ctx f dump get_str old_code =
 		write (Printf.sprintf "%s@%d" (fundecl_name f) f.findex);
 		let rec loop_arg = function
 			| [] -> []
-			| (_,p) :: _ when p >= 0 -> []
-			| (str,p) :: l -> (get_str str ^ ":" ^ string_of_int p) :: loop_arg l
+			| (_,p,_) :: _ when p >= 0 -> []
+			| (str,p,_) :: l -> (get_str str ^ ":" ^ string_of_int p) :: loop_arg l
 		in
 		write (Printf.sprintf "ARGS = %s\n" (String.concat ", " (loop_arg (Array.to_list f.assigns))));
 		if reg_remap then begin
@@ -730,7 +730,12 @@ let remap_fun ctx f dump get_str old_code =
 		) !jumps;
 
 		let assigns = !assigns in
-		Array.iteri (fun idx (i,p) -> if p >= 0 then Array.unsafe_set assigns idx (i, Array.unsafe_get new_pos p)) assigns;
+		let remap_scope_end p =
+			if p < 0 then -1 else if p >= Array.length new_pos then Array.length out_code else Array.unsafe_get new_pos p
+		in
+		Array.iteri (fun idx (i,p,scope_end) ->
+			if p >= 0 then Array.unsafe_set assigns idx (i, Array.unsafe_get new_pos p, remap_scope_end scope_end)
+		) assigns;
 
 		code := out_code;
 		debug := new_debug;
