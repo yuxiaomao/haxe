@@ -572,6 +572,12 @@ let remap_fun ctx f dump get_str old_code =
 			try Hashtbl.find ctx.r_blocks_pos p with Not_found -> resolve_block (p - 1)
 		in
 
+		let writes_reg p reg =
+			let found = ref false in
+			opcode_fx (fun r read -> if r = reg && not read then found := true) (Array.unsafe_get old_code p);
+			!found
+		in
+
 		let new_assigns = List.fold_left (fun acc (i,p,scope_end) ->
 			let gmap = Hashtbl.create 0 in
 			(*
@@ -585,7 +591,7 @@ let remap_fun ctx f dump get_str old_code =
 				if reg < 0 then [] (* ? *) else
 				if reg < nargs then [(i,-reg-2,-1)] else
 				let b = resolve_block p in
-				if last_w >= b.bstart && last_w < b.bend && last_w < p then loop last_w else
+				if last_w >= b.bstart && last_w < b.bend && last_w < p && writes_reg last_w reg then loop last_w else
 				let wp = try PMap.find reg b.bwrite with Not_found -> -1 in
 				let rec gather b =
 					if Hashtbl.mem gmap b.bstart then [] else begin
@@ -611,10 +617,10 @@ let remap_fun ctx f dump get_str old_code =
 					let rec find_w p =
 						if p < b.bstart then
 							gather b
+						else if writes_reg p reg then
+							loop p
 						else
-							let found = ref false in
-							opcode_fx (fun r read -> if r = reg && not read then found := true) (Array.unsafe_get old_code p);
-							if !found then loop p else find_w (p - 1)
+							find_w (p - 1)
 					in
 					find_w (p - 1)
 			in
