@@ -155,7 +155,7 @@ class TestInlineConstructors extends TestBase {
 		return [arr[0], arr[1]];
 	}
 
-	@:js('var v_i = 0;var acc = 0;while(v_i < 10) acc += v_i++;return acc;')
+	@:js('var iter_i = 0;var acc = 0;while(iter_i < 10) acc += iter_i++;return acc;')
 	static function testIteratorMethodInliningInForLoop() {
 		var iter : Iterator<Int> = new InlineIterator();
 		var acc = 0;
